@@ -97,7 +97,7 @@ table{width:100%;border-collapse:collapse}td,th{padding:10px 8px;text-align:left
 .chk div{padding:5px 0}.ok{color:var(--acc)}.no{color:var(--bad)}
 details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:pre-wrap;color:#cfc8f5;font:12.5px/1.55 ui-monospace,Consolas,monospace;margin:10px 0 0;max-height:260px;overflow:auto}
 .setgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;align-items:start}.setcol{display:flex;flex-direction:column;gap:20px;min-width:0}
-.aboutcard{display:flex;gap:28px;align-items:center;flex-wrap:wrap}.aboutcard .mimg{width:230px;height:230px}.aboutcard .txt{flex:1;min-width:260px}
+.aboutcard{display:flex;gap:28px;align-items:center;flex-wrap:wrap}.aboutcard .alogo{width:230px;height:236px;background:var(--logo) center/contain no-repeat}.aboutcard .txt{flex:1;min-width:260px}
 .aboutcard p{margin:0 0 10px;color:var(--mut);font-size:15px}.aboutcard ul,.safe ul{margin:8px 0 0;padding-left:20px;color:var(--mut);line-height:1.8}
 .save{position:fixed;left:calc(50% + 136px);bottom:22px;transform:translate(-50%,140px);background:rgba(28,18,62,.96);border:1px solid #9a78ff;border-radius:99px;padding:11px 14px 11px 24px;display:flex;align-items:center;gap:14px;box-shadow:0 14px 40px rgba(0,0,0,.6),0 0 0 4px rgba(124,77,255,.15);transition:.25s;z-index:5}.save.show{transform:translate(-50%,0)}
 .toast{position:fixed;top:18px;right:18px;background:rgba(28,18,62,.97);border:1px solid var(--line);border-left:4px solid var(--acc);padding:12px 18px;border-radius:12px;opacity:0;transition:.25s;pointer-events:none;z-index:9;max-width:440px}.toast.show{opacity:1}.toast.err{border-left-color:var(--bad)}
@@ -301,7 +301,7 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:p
   </div>
 </section>
 <section class="tab stack" data-tab="about" hidden>
-  <div class="card aboutcard"><div class="mimg" role="img" aria-label="Clippy"></div><div class="txt"><h2 style="margin-bottom:10px">About Clippy</h2>
+  <div class="card aboutcard"><div class="alogo" role="img" aria-label="Clippy"></div><div class="txt"><h2 style="margin-bottom:10px">About Clippy</h2>
     <p>Clippy finds the best moments in streams and videos, cuts them into vertical Shorts and posts them to YouTube and TikTok, all on your own PC.</p>
     <p>Source code and updates: <a href="https://github.com/FrostyDog222/Clippy" target="_blank" rel="noopener">github.com/FrostyDog222/Clippy</a><br>Based on the MIT-licensed gtavi-claudecode project by Bodila51.</p></div></div>
   <div class="card"><h2>Start with Windows</h2>
