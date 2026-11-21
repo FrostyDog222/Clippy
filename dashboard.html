@@ -165,7 +165,7 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:p
 
   <div class="card">
     <div class="rvhead"><span class="okic"><svg class="ic"><use href="#i-check"/></svg></span><div class="grow"><h2>Ready to post</h2><div class="hint" id="rvnote" style="margin-top:2px">Nothing is waiting.</div></div>
-      <label class="f" style="margin:0;min-width:260px"><span>Post as</span><select id="rvmode"><option value="private" selected>Private (YouTube) / Only me (TikTok)</option><option value="public">Public (YouTube) / Everyone (TikTok)</option></select></label></div>
+      <label class="f" style="margin:0;min-width:260px"><span>Post as</span><select id="rvmode"><option value="private" selected>Private</option><option value="public">Public</option></select></label></div>
     <div id="reviewbox"></div>
   </div>
 </section>
@@ -410,7 +410,7 @@ $('status').textContent=d.paused?'Paused':d.run_stale?'Last run stopped':run?'Po
 $('ap').className='tg'+(srv.autopilot?' on':'');$('lw').className='tg'+(srv.live_watch?' on':'');$('pausebtn').lastChild.textContent=' '+(d.paused?'Resume':'Pause');
 $('s1').textContent=d.today.length+' / '+srv.posts_per_day;$('s1s').textContent=d.today.length?'Last: '+((d.today[d.today.length-1].ts||'').slice(11,16)||'-'):'Nothing posted yet';
 $('s2').textContent=d.why.replace(/^Waiting: /,'').replace(/^Next run is due now.*/,'Due now');$('s2s').textContent=srv.autopilot?'Autopilot is checking every minute':'Autopilot is off';
-$('s3').textContent=d.mode==='public'?'Public':'Private';$('s3s').textContent=d.mode==='public'?'YouTube Public, TikTok Everyone':'YouTube Private, TikTok Only me';
+visShow();
 {const s=d.signin||{},b=s.busy,set=(dot,t,v)=>{dot.className='dot '+(v===true?'on':v===false?'bad':'');t.textContent=b?'Checking...':v===true?'Signed in':v===false?'Needs sign in':'Not checked'};
 set($('yd'),$('yt'),s.youtube);set($('td'),$('tk'),s.tiktok);
 $('sib').disabled=$('scb').disabled=!!b;$('sih').textContent=b==='login'?'Sign-in window is open. Close it when you are done and I will re-check.':b==='check'?'Checking both accounts (about 15 seconds)...':s.ts?'Last checked '+s.ts.replace('T',' '):''}
@@ -425,6 +425,9 @@ $('ins').innerHTML=P.insights.length?P.insights.map(x=>'&bull; '+esc(x)).join('<
 lastPerf=P;renderPerf()}
 $('log').textContent=d.log||'(empty)';prog(p,run,d.run_stale)}
 
+function visShow(){const pub=$('rvmode').value==='public';$('s3').textContent=pub?'Public':'Private';$('s3s').textContent=pub?'YouTube Public, TikTok Everyone':'YouTube Private, TikTok Only me'}
+try{const m=localStorage.getItem('rvmode');if(m==='public'||m==='private')$('rvmode').value=m}catch(e){}
+$('rvmode').onchange=function(){try{localStorage.setItem('rvmode',this.value)}catch(e){}visShow()};visShow();
 function updShow(u){u=u||{};const m=$('updmsg');if(!m)return;
  let t='Not checked yet.';if(u.off)t='Updates are switched off for this copy.';else if(u.error)t=u.error;else if(u.restart)t='Updated ('+(u.files||0)+' files). Close and start the dashboard again to use the new version.';else if(u.available)t='A new version is available'+(u.message?': '+u.message:'')+'.';else if(u.checked)t='Clippy is up to date (checked '+u.checked.replace('T',' ')+').';
  m.textContent=t;$('updgo').hidden=!u.available||!!u.off;$('updchk').hidden=!!u.off}
