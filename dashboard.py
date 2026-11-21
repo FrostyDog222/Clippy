@@ -1343,7 +1343,28 @@ def ytdlp_loop():
         time.sleep(3 * 3600)
 
 
+_LOCK = []  # keeps the single-dashboard lock alive for the whole run
+
+
+def single_dashboard():
+    """Only ONE dashboard per user, whatever the port: a named Windows lock that the system releases by itself when the program ends (no stale lock file). A second
+    dashboard waits a few seconds (a restart hands over from the old one to the new one) and then ends. Test runs (CLIPPY_NOBG / CLIPPY_ALLOW_MULTI) are exempt."""
+    if os.environ.get("CLIPPY_NOBG") or os.environ.get("CLIPPY_ALLOW_MULTI") or os.name != "nt":
+        return
+    import ctypes
+    k = ctypes.windll.kernel32
+    for _ in range(40):
+        h = k.CreateMutexW(None, False, "Local" + chr(92) + "ClippyDashboardSingleInstance")
+        if h and k.GetLastError() != 183:  # 183 = ERROR_ALREADY_EXISTS: another dashboard owns it
+            _LOCK.append(h); return
+        if h:
+            k.CloseHandle(h)
+        time.sleep(0.5)
+    sys.exit("Another Clippy dashboard is already open. Only one can run at a time: use that one (or press Quit dashboard there first).")
+
+
 if __name__ == "__main__":
+    single_dashboard()
     try:
         secretstore.migrate_all()  # any old plain-text key becomes an encrypted file
     except Exception:
