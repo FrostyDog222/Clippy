@@ -195,7 +195,7 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:p
     <div class="chips" id="chips"></div>
     <input type="text" id="addc" placeholder="Add a streamer and press Enter" onkeydown="if(event.key==='Enter'||event.key===','){event.preventDefault();addC(this.value);this.value=''}" onpaste="setTimeout(()=>{addC(this.value);this.value=''})">
     <label class="f" style="margin-top:14px"><span>Never clip these streamers (separated by commas)</span><input type="text" id="blocked_streamers" maxlength="300" placeholder="e.g. a streamer who asked not to be clipped"></label><label class="f" style="margin-top:14px"><span>Max clips per streamer per day</span><input type="number" id="max_per_creator_per_day" min="1"></label>
-    <div class="sw"><div><div>Use trending videos as a backup</div><small style="color:var(--mut)">When your streamers have nothing new, the bot picks what is popular for your topic right now. With an empty list it uses trending only. If the list is empty and this is OFF, the bot cannot be turned on.</small></div><button class="tg" id="tf" onclick="setTF()"></button></div>
+    <div class="sw"><div><div>Use trending videos as a backup</div><small style="color:var(--mut)">When your streamers have nothing new, the bot picks what is popular for your topic right now. With an empty list it uses trending only. If the list is empty and this is OFF, the bot cannot be turned on. This works in every mode: turn it OFF to stay strictly on your list.</small></div><button class="tg" id="tf" onclick="setTF()"></button></div>
   </div>
     <div class="card"><h2>Schedule</h2>
     <div class="r2">
@@ -315,7 +315,7 @@ const UPW={claude:'Uses Claude in Chrome to upload and write titles. Works today
 script:'<b>Runs without Claude.</b> A script drives its own Chrome profile (sign in once with <code>scripts\\upload.py login</code>). Full-quality files, no size limit. <b>Warnings:</b> it can break when YouTube or TikTok change their pages, and automated browsing carries some risk to your accounts. It stops on any CAPTCHA or sign-in page. Titles come from a template instead of Claude.',
 api:'<b>Official APIs. Read before using:</b><br>&bull; <b>YouTube:</b> a new, unaudited API project can only upload as <b>Private</b>; public needs a Google audit. Quota allows about 6 uploads a day (1,600 units each of 10,000).<br>&bull; <b>TikTok:</b> unaudited apps can only post <b>Only me</b> and to test accounts; public needs TikTok to approve your app (weeks, can be refused).<br>&bull; You create the developer apps yourself (steps at the top of <code>scripts\\api_upload.py</code>). Untested until you add credentials.'};
 function upl(){$('apibox').style.display=draft.title_writer==='api'?'block':'none';$('upw').innerHTML=UPW[draft.uploader]||''}
-const MODES={rotate:'Goes through your list in order.',random:'Picks a random streamer that has not posted today.',fixed:'Only your list, never falls back to trending.'};
+const MODES={rotate:'Goes through your list in order.',random:'Picks a random streamer that has not posted today.',fixed:'Only your streamers, in the order shown. Trending is used only if the backup switch below is ON.'};
 let srv=null,draft=null;
 const snap=c=>JSON.stringify([NUM.map(k=>+c[k]),TXT.map(k=>c[k]),c.creator_mode,c.creators,!!c.use_trending_fallback,!!c.trending_any,c.post_youtube!==false,c.post_tiktok!==false,!!c.stop_on_strike,c.auto_update!==false,!!c.ai_check,c.ai_profiles,c.ai_active,c.ai_check_profile,c.ai_title_profile,c.cleanup_sources!==false,c.languages]);
 const dirty=()=>draft&&srv&&snap(draft)!==snap(srv);
@@ -530,7 +530,7 @@ $('rvpager').innerHTML=pager(L.length,rvPg,'rvPage',RVPAGE)}
 
 async function rvRate(id,r){const cur=$('rvu_'+id).classList.contains('pri')?1:$('rvn_'+id).classList.contains('bad')?-1:0;const nr=cur===r?0:r;const rs=await fetch('/api/review/rate',{method:'POST',body:JSON.stringify({id,rating:nr})});if(!rs.ok){toast(await rs.text(),1);return}toast(nr===1?'Marked as standing out (good)':nr===-1?'Marked as standing out (bad)':'Rating removed');load()}
 function goTo(tab,id){showTab(tab);const e=id&&$(id);if(!e)return;setTimeout(()=>{const c=e.closest('.card')||e;c.scrollIntoView({behavior:'smooth',block:'center'});c.classList.add('flash');setTimeout(()=>c.classList.remove('flash'),1600);try{e.focus({preventScroll:true})}catch(x){}},60)}
-function segSync(){const pub=$('rvmode').value==='public';document.querySelectorAll('.seg button').forEach(b=>b.classList.toggle('on',b.dataset.v===(pub?'public':'private')));const h=$('rvseg2');if(h)h.textContent=pub?'YouTube Public, TikTok Everyone':'YouTube Private, TikTok Only me'}
+function segSync(){const pub=$('rvmode').value==='public';document.querySelectorAll('.segwrap .seg button').forEach(b=>b.classList.toggle('on',b.dataset.v===(pub?'public':'private')));const h=$('rvseg2');if(h)h.textContent=pub?'YouTube Public, TikTok Everyone':'YouTube Private, TikTok Only me'}
 function rvSeg(v){const s=$('rvmode');s.value=v;s.dispatchEvent(new Event('change'))}
 function visShow(){segSync();const pub=$('rvmode').value==='public';$('s3').textContent=pub?'Public':'Private';$('s3s').textContent=''}
 try{const m=localStorage.getItem('rvmode');if(m==='public'||m==='private')$('rvmode').value=m}catch(e){}

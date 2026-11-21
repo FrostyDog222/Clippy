@@ -1,6 +1,6 @@
 """One fully automatic run WITHOUT Claude: pick source -> find strong moment -> cut -> check -> post (post_clip.py) -> clean up.
 python scripts/autorun.py [--force] [--dry]     --force ignores tick.py (daily limit/window/gap), --dry stops before posting
-Source order: 1) the user's streamer list (rotate/random/fixed)  2) if "use_trending_fallback" is ON: what is trending/popular for GTA 6 right now
+Source order: 1) the user's streamer list (rotate/random/list only; their own Twitch clips first, then their YouTube videos)  2) if "use_trending_fallback" is ON: what is trending/popular for GTA 6 right now
 (also used when the list is empty). List empty AND trending OFF -> nothing to do (the dashboard refuses to start the bot in that state).
 Quality rules: only a moment scored >= STRONG by moments.py; weak sources are remembered in autopost_state.json ("rejected") and skipped.
 Limits: hook text is a plain template (no AI); there is no visual check of the clip beyond the technical check."""
@@ -827,12 +827,7 @@ def _main():
             pool += [(c, creator) for c in creator_twitch_clips(creator, skip_ids, 6)]
         except Exception as e:
             log(f"  Twitch clips of {creator} unavailable ({str(e)[:60]})")
-    if trending_on and cfg.get("creator_mode") != "fixed":
-        try:
-            pool += [(c, None) for c in search_twitch_clips(skip_ids)]
-        except Exception as e:
-            log(f"  trending Twitch clips unavailable ({str(e)[:60]})")
-    seen, ranked = set(), []
+    seen, ranked = set(), []  # (trending is NOT mixed in here: it is only a backup, below, when the streamers gave nothing)
     for c, who in sorted(pool, key=lambda t: -t[0]["views"]):
         if c["id"] not in seen and (a.only is None or c["id"] == a.only):
             seen.add(c["id"]); ranked.append((c, who))
@@ -858,8 +853,8 @@ def _main():
         code = try_videos(vids, st, sf, a.dry, 25, creator)
         if code is not None:
             return code
-    # 2) trending / popular, when allowed (also when the list is empty)
-    if trending_on and cfg.get("creator_mode") != "fixed":
+    # 2) trending / popular: a BACKUP when the streamers gave nothing (or the list is empty). The "trending backup" switch alone decides it, in every mode.
+    if trending_on:
         progress(30, "List had nothing: checking what is trending")
         log("trending: looking at what is popular " + ("right now (any topic)" if TP["any"] else "for " + TP["name"]))
         skip_ch |= {norm(c) for c in creators}  # those were already tried above
