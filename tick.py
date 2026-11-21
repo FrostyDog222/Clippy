@@ -4,7 +4,8 @@ import datetime as dt, json, pathlib, sys
 R = pathlib.Path(__file__).parent
 
 
-def decide(cfg, posts, now, paused=False):
+def decide(cfg, posts, now, paused=False, gap=True):
+    """gap=False: the minimum gap between posts is not checked (it only matters when something is POSTED by itself; making clips for Ready to post does not wait for it)."""
     if paused or not cfg.get("enabled", True):
         return False, "paused or disabled", None
     today = now.strftime("%Y-%m-%d")
@@ -15,7 +16,7 @@ def decide(cfg, posts, now, paused=False):
     if not (cfg["window_start"] <= hm <= cfg["window_end"]):
         return False, f"outside window {cfg['window_start']}-{cfg['window_end']}", None
     stamps = [dt.datetime.fromisoformat(p["ts"]) for p in mine if p.get("ts")]
-    if stamps and (now - max(stamps)).total_seconds() < int(cfg["min_gap_minutes"]) * 60:
+    if gap and stamps and (now - max(stamps)).total_seconds() < int(cfg["min_gap_minutes"]) * 60:
         return False, f"gap < {cfg['min_gap_minutes']} min since last post", None
     start = dt.date.fromisoformat(cfg["start_date"])
     private = now.date() < start + dt.timedelta(days=int(cfg["private_days"]))
@@ -34,6 +35,7 @@ def selftest():
     assert not decide(cfg, two, n)[0]
     assert decide(cfg, [], n.replace(day=23))[2] == "public"
     assert not decide(cfg, [], n, paused=True)[0]
+    assert decide(cfg, [{"date": "2026-11-19", "ts": "2026-11-19T11:30:00"}], n, gap=False)[0]  # clipping does not wait for the gap
     print("selftest ok")
 
 

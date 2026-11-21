@@ -871,7 +871,7 @@ def _main():
         progress(100, "Skipped: live mode is ON (live streams only)"); log("NOT RUN: live mode is ON, videos are not used"); return 0
     now = dt.datetime.now()
     if not a.force:
-        ok, why, _ = tick.decide(cfg, st["posts"], now, (R / "PAUSED.txt").exists())
+        ok, why, _ = tick.decide(cfg, st["posts"], now, (R / "PAUSED.txt").exists(), gap=bool(cfg.get("auto_post")))  # the gap only matters for posting by itself
         if not ok:
             progress(100, f"Skipped: {why}"); log(f"NOT DUE: {why}"); return 0
     left = yt_blocked()

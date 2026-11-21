@@ -620,6 +620,25 @@ def test_selected_clips_can_be_scheduled():
         d.REVIEW = keep
 
 
+def test_manual_and_automation_choose_their_source_separately():
+    import sys, json, tempfile
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    old = {**d.read_cfg(), "run_source": "video", "auto_source": "video"}
+    new = d.clean({**old, "run_source": "video", "auto_source": "live"}, old)
+    assert new["run_source"] == "video" and new["auto_source"] == "live"                 # manual on videos, automation on live streams
+    assert d.clean({**old, "run_source": "junk"}, {**old, "run_source": "live"})["run_source"] == "live"   # a bad value keeps the old one
+    assert d.clean({k: v for k, v in old.items() if k not in ("run_source", "auto_source")}, {k: v for k, v in old.items() if k not in ("run_source", "auto_source")})["auto_source"] == "video"
+    keep = d.CFG; d.CFG = Path(tempfile.mkdtemp()) / "c.json"
+    try:
+        d.save_cfg({**old}); d.start_live("manual", 5)
+        c = json.loads(d.CFG.read_text(encoding="utf-8"))
+        assert c["live_watch"] is True and c["live_by"] == "manual" and c["live_target"] == 5
+        d.start_live("auto", 99); assert json.loads(d.CFG.read_text(encoding="utf-8"))["live_target"] == 10 and json.loads(d.CFG.read_text(encoding="utf-8"))["live_by"] == "auto"
+    finally:
+        d.CFG = keep
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

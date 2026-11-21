@@ -142,7 +142,7 @@ def process(item, cfg, dry):
     cj["info"] = {"title": s["title"], "channel": s["channel"], "uploader": s["channel"], "webpage_url": s["url"], "id": safe}  # cut.py takes credit/link from here
     (job / "candidates.json").write_text(json.dumps(cj, ensure_ascii=False, indent=1), encoding="utf-8")
     cands = sorted(cj["candidates"], key=lambda c: -c["score"])
-    v = {"id": safe, "title": s["title"], "channel": s["channel"], "duration": 0, "views": s.get("viewers") or 0}
+    v = {"id": f"{safe}-{int(item['born'])}", "title": s["title"], "channel": s["channel"], "duration": 0, "views": s.get("viewers") or 0}
     for c in cands[:2]:  # chat already proved this moment matters, so no loudness gate here; the layout/face checks still apply
         code = autorun.try_candidate(v, c["score"], job, c["n"], c, s.get("creator"), dry)
         if code is not None:
@@ -173,6 +173,7 @@ def main():
     except BaseException as e:
         log(f"yt-dlp update check skipped ({str(e)[:60]})")
     watches, queue, cooldown, posted, last, next_find = [], [], {}, 0, "starting", 0.0
+    made_by = {}  # prepare-only: clips made per streamer in this session
     log("live watcher started")
     try:
         while True:
@@ -204,14 +205,17 @@ def main():
             queue[:] = [q for q in queue if time.time() - q["born"] < QUEUE_KEEP and q["path"].exists()]
             if queue:
                 st = json.loads((R / "autopost_state.json").read_text(encoding="utf-8")) if (R / "autopost_state.json").exists() else {"posts": []}
-                ok, why, _ = tick.decide(cfg, st.get("posts", []), dt.datetime.now(), False)
-                ok = ok or a.force
+                ok, why, _ = tick.decide(cfg, st.get("posts", []), dt.datetime.now(), False, gap=bool(cfg.get("auto_post")))  # same posting window and daily limit as everything else; the gap only matters when it posts by itself
+                by = cfg.get("live_by") or ("auto" if (cfg.get("autopilot") or cfg.get("auto_post")) else "manual")
+                ok = ok or a.force or by == "manual"  # the schedule (window, daily limit, gap) only applies to automation (started by Autopilot); a live run you started yourself ignores it
                 if ok:
                     today = dt.datetime.now().strftime("%Y-%m-%d")
                     cnt = {}
                     for p in st.get("posts", []):
                         if p.get("date") == today and not p.get("deleted"):
                             cnt[norm(p.get("channel") or "")] = cnt.get(norm(p.get("channel") or ""), 0) + 1
+                    for k_, n_ in made_by.items():
+                        cnt[k_] = cnt.get(k_, 0) + n_
                     maxc = int(cfg.get("max_per_creator_per_day", 1))
                     queue.sort(key=lambda q: (-q.get("rel", 1.0), -q["rate"]))  # relative to each stream's own usual spikes, so a small stream's real peak is not buried by a big stream's normal chat
                     pick = next((q for q in queue if cnt.get(norm(q["s"]["channel"]), 0) < maxc), None)
@@ -220,7 +224,8 @@ def main():
                         last = f"processing spike from {pick['s']['channel']}"; write_status(watches, queue, posted, last)
                         try:
                             if process(pick, cfg, a.dry):
-                                posted += 1; last = f"posted a clip from {pick['s']['channel']}"
+                                posted += 1; last = (f"posted a clip from {pick['s']['channel']}" if cfg.get("auto_post", False) else f"clip ready from {pick['s']['channel']} (in Ready to post)")
+                                made_by[norm(pick["s"]["channel"])] = made_by.get(norm(pick["s"]["channel"]), 0) + 1
                             else:
                                 last = f"spike from {pick['s']['channel']} was not good enough"
                         except Exception as e:
@@ -229,6 +234,12 @@ def main():
                             f.unlink(missing_ok=True)  # the spike clip is no longer needed (the finished Short is kept by cleanup.py rules)
                         log(last)
             write_status(watches, queue, posted, last)
+            want = max(1, int(cfg.get("live_target") or cfg.get("clips_per_run", 1) or 1))
+            if not cfg.get("auto_post", False) and posted >= want:  # prepare-only live mode: "clips this run" is how many clips it makes, then it switches itself off
+                log(f"{posted} clip(s) ready (the number you chose for this run): live mode switches itself off")
+                c2 = cfg_now(); c2["live_watch"] = False
+                (R / "autopost_config.json").write_text(json.dumps(c2, indent=2), encoding="utf-8")
+                last = f"done: {posted} clip(s) are in Ready to post"; break
             time.sleep(10)
     finally:
         for w in watches:

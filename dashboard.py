@@ -410,6 +410,12 @@ def sched_posts(c):
     return posts + [{"date": t.strftime("%Y-%m-%d"), "ts": t.isoformat(timespec="seconds")} for _, t in waiting_clips()]
 
 
+def start_live(by, target):
+    """Start the live watcher (the dashboard's live loop launches it): by = "manual" (you pressed Run now: the schedule does not apply) or "auto" (Autopilot: the schedule applies);
+    target = how many clips it makes when Auto-Post is OFF, then it switches itself off."""
+    c = read_cfg(); c["live_watch"] = True; c["live_by"] = by; c["live_target"] = max(1, min(10, int(target))); save_cfg(c)
+
+
 def autopilot_loop():
     while True:
         time.sleep(60)
@@ -425,6 +431,13 @@ def autopilot_loop():
                 continue
             if running() or c.get("live_watch"):  # live mode ON: the live watcher posts, videos are not used
                 continue
+            if c.get("auto_source") == "live":  # Autopilot clips from live streams (manual runs can still use videos): start the live watcher when the schedule allows
+                ok, _, _ = tick.decide(c, sched_posts(c), dt.datetime.now(), PAUSE.exists(), gap=bool(c.get("auto_post")))
+                if ok and (c.get("auto_post") or len(waiting_clips()) < MAX_WAITING):
+                    today = dt.date.today().isoformat()
+                    left = int(c.get("posts_per_day", 1)) - len([p for p in sched_posts(c) if p.get("date") == today and not p.get("deleted")])
+                    start_live("auto", max(1, min(int(c.get("auto_clips_per_run", 1) or 1), left)))
+                continue
             if c.get("auto_post"):
                 ok, _, _ = tick.decide(c, read_posts(), dt.datetime.now(), PAUSE.exists())
                 if ok:
@@ -432,7 +445,7 @@ def autopilot_loop():
             else:  # prepare only: find and prepare clips on the same schedule, never post, and stop while enough are waiting
                 if len(waiting_clips()) >= MAX_WAITING:
                     continue
-                ok, _, _ = tick.decide(c, sched_posts(c), dt.datetime.now(), PAUSE.exists())
+                ok, _, _ = tick.decide(c, sched_posts(c), dt.datetime.now(), PAUSE.exists(), gap=False)  # preparing clips does not wait for the posting gap
                 if ok:
                     today = dt.date.today().isoformat()
                     left = int(c.get("posts_per_day", 1)) - len([p for p in sched_posts(c) if p.get("date") == today and not p.get("deleted")])
@@ -554,6 +567,8 @@ def clean(new, old):
     out["display_name"] = re.sub(r"\s+", " ", str(new.get("display_name", ""))).strip()[:40]  # the name in the welcome line
     out["auto_clips_per_run"] = max(1, min(10, int(new.get("auto_clips_per_run", 1) or 1)))  # clips per automatic (Autopilot) run; the manual "clips this run" is saved right away by /api/clips
     out["blocked_streamers"] = ", ".join(x.strip() for x in re.split(r"[,;\n]", str(new.get("blocked_streamers", ""))) if x.strip())[:300]  # streamers that are never clipped
+    for k_ in ("run_source", "auto_source"):  # where clips come from: manual runs and Autopilot choose separately (videos / VODs or live streams)
+        out[k_] = new.get(k_) if new.get(k_) in ("video", "live") else (old.get(k_) if old.get(k_) in ("video", "live") else "video")
     out["notify"] = bool(new.get("notify", False))  # optional Windows pop-ups (run finished, scheduled post done / failed)
     out["auto_update"] = bool(new.get("auto_update", True))  # install new Clippy versions by itself (settings and clips are never touched)
     # auto_post is not set here: its switches (Ready to post and Settings) save immediately through /api/autopost; OFF (default) = finished clips wait in "Ready to post"
@@ -1143,7 +1158,7 @@ class H(http.server.BaseHTTPRequestHandler):
         if self.path == "/api/state":
             c, posts = read_cfg(), read_posts()
             today = dt.date.today().isoformat()
-            ok, why, mode = tick.decide(c, sched_posts(c), dt.datetime.now(), PAUSE.exists())
+            ok, why, mode = tick.decide(c, sched_posts(c), dt.datetime.now(), PAUSE.exists(), gap=bool(c.get("auto_post")))
             log = LOG.read_text(encoding="utf-8")[-1500:] if LOG.exists() else ""
             return self.send(200, json.dumps({"config": c, "paused": PAUSE.exists(), "checks": checks(),
                                               "today": [p for p in posts if p.get("date") == today and not p.get("deleted")], "log": log,
@@ -1189,6 +1204,12 @@ class H(http.server.BaseHTTPRequestHandler):
         elif self.path == "/api/learn/reset":  # start fresh: the learned model goes, the ratings log is set aside (renamed)
             import learn
             learn.reset(); _LEARN["v"] = None
+        elif self.path == "/api/source":  # where clips come from, saved right away: which = run (manual runs) | auto (Autopilot); source = video | live
+            try:
+                b = json.loads(self.rfile.read(n)); assert b["which"] in ("run", "auto") and b["source"] in ("video", "live")
+                c = read_cfg(); c[b["which"] + "_source"] = b["source"]; save_cfg(c)
+            except Exception:
+                return self.send(400, "bad source", "text/plain")
         elif self.path == "/api/clips":  # "how many clips should this run make" (manual runs), saved right away
             try:
                 n = int(json.loads(self.rfile.read(n))["n"]); c = read_cfg(); c["clips_per_run"] = max(1, min(10, n)); save_cfg(c)
@@ -1207,14 +1228,21 @@ class H(http.server.BaseHTTPRequestHandler):
             save_cfg(c)
         elif self.path == "/api/live":
             c = read_cfg(); c["live_watch"] = not c.get("live_watch", False)
+            if c["live_watch"]:
+                c["live_by"] = "auto" if c.get("autopilot") else "manual"; c["live_target"] = int(c.get("clips_per_run", 1) or 1)
             if c["live_watch"] and PAUSE.exists():
                 return self.send(409, "Paused: press Pause / resume first", "text/plain")
             save_cfg(c)
         elif self.path == "/api/run":
             if PAUSE.exists():
                 return self.send(409, "Paused: press Pause / resume first", "text/plain")
+            if read_cfg().get("run_source") == "live":  # a manual run on live streams: the schedule (window, daily limit, gap) does not apply to it
+                if read_cfg().get("live_watch"):
+                    return self.send(409, "Live watching is already running. Press Stop now to end it first.", "text/plain")
+                start_live("manual", int(read_cfg().get("clips_per_run", 1) or 1)); set_prog(1, "Live: watching streams for chat spikes")
+                return self.send(200, "{}")
             if read_cfg().get("live_watch"):
-                return self.send(409, "Live mode is ON: the bot only uses live streams. Turn 'Live chat watching' off to post from videos.", "text/plain")
+                return self.send(409, "Live watching is running. Press Stop now first, or pick Live streams for manual runs.", "text/plain")
             if blocked_msg(read_cfg()):
                 return self.send(409, blocked_msg(read_cfg()), "text/plain")
             run_now(True, int(read_cfg().get("clips_per_run", 1) or 1))  # the manual button: run now even outside the schedule, with the "clips this run" number
