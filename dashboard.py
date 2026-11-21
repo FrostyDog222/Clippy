@@ -415,7 +415,7 @@ def sched_posts(c):
     return posts + [{"date": t.strftime("%Y-%m-%d"), "ts": t.isoformat(timespec="seconds")} for _, t in waiting_clips(include_reviewed=True)]
 
 
-def log_text():
+def log_text(limit=2500, run_limit=1500):
     """What the Current run log shows: the live watcher's log while live watching is on (it has its own file), otherwise the log of the last normal run."""
     try:
         lf = R / "live_watch.log"
@@ -427,8 +427,8 @@ def log_text():
                 pass
             t = raw.decode("utf-8", errors="replace").replace(chr(0), "")
             i = t.rfind("live watcher started")
-            return t[max(0, i - 9):][-2500:] if i >= 0 else t[-2500:]
-        return LOG.read_text(encoding="utf-8")[-1500:] if LOG.exists() else ""
+            return t[max(0, i - 9):][-limit:] if i >= 0 else t[-limit:]
+        return LOG.read_text(encoding="utf-8", errors="replace")[-run_limit:] if LOG.exists() else ""
     except OSError:
         return ""
 
@@ -1197,7 +1197,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                               "progress": progress(), "signin": signin_state(), "jobs_mb": cleanup.jobs_mb(), "all_languages": textutil.LANGS, "perf": perf(), "ai_keys": {p["id"]: secretstore.exists(f"key_{p['id']}") for p in c.get("ai_profiles", [])}, "blocked": blocked_msg(c), "live": live_status(),
                                               "review": review_items(), "run_stale": run_stale(), "autostart": autostart_state(), "health": health_info(), "run_timing": run_timing(), "run_suspended": run_suspended(),
                                               "update": update_info(), "learn": learn_info(), "boot": BOOT, "restart_needed": restart_wanted(), "html": int((R / "dashboard.html").stat().st_mtime),
-                                              "runlog": (R / "autorun.log").read_text(encoding="utf-8", errors="replace")[-8000:] if (R / "autorun.log").exists() else "",
+                                              "runlog": log_text(8000, 8000),  # the Current run log: the live watcher's log while live watching is on, else the last run's
                                               "why": "Next run is due now" if ok else "Waiting: " + why,
                                               "mode": tick.decide({**c, "posts_per_day": 99, "window_start": "00:00", "window_end": "23:59", "min_gap_minutes": 0}, [], dt.datetime.now())[2]}))
         self.send(200, (R / "dashboard.html").read_text(encoding="utf-8"), "text/html")

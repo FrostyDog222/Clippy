@@ -724,6 +724,23 @@ def test_live_log_clear_never_leaves_nul_bytes():
         d.R = keep; d.CFG = keep / "autopost_config.json"
 
 
+def test_current_run_log_shows_the_live_log_while_live_is_on():
+    import sys, tempfile, json
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    keep = (d.R, d.CFG, d.LOG, d.LIVE_STATUS); tmp = Path(tempfile.mkdtemp())
+    d.R, d.CFG, d.LOG, d.LIVE_STATUS = tmp, tmp / "c.json", tmp / "autorun.log", tmp / "no_live_status.json"   # (not the real watcher's status file)
+    try:
+        (tmp / "autorun.log").write_text("old video run line", encoding="utf-8"); (tmp / "live_watch.log").write_text("10:00:00 live watcher started" + chr(10) + "10:01:00 chat spike on x", encoding="utf-8")
+        d.CFG.write_text(json.dumps({"live_watch": False}))
+        assert "old video run line" in d.log_text(8000, 8000)                               # live off: the normal run log
+        d.CFG.write_text(json.dumps({"live_watch": True}))
+        t = d.log_text(8000, 8000)
+        assert "chat spike on x" in t and "old video run line" not in t                       # live on: the live watcher's log
+    finally:
+        d.R, d.CFG, d.LOG, d.LIVE_STATUS = keep
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""
