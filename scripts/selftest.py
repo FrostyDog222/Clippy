@@ -367,6 +367,51 @@ def test_source_subtitles_are_detected_and_clippys_are_skipped():
         cc.has_burned_captions, autorun.log, autorun.CFG, autorun.ORIGIN = keep
 
 
+def test_scheduled_posting_and_mark_as_not_posted():
+    import datetime as dtm, json, sys, tempfile
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    tmp = Path(tempfile.mkdtemp()); (tmp / "review").mkdir()
+    keep = (d.REVIEW, d.review_post, d.REVIEW_STATUS.copy(), d.threading.Thread)
+    d.REVIEW = tmp / "review"; d.REVIEW_STATUS.clear()
+    now = dtm.datetime(2026, 11, 22, 18, 0)
+    def clip(i, **extra):
+        stem = f"17959990{i:02d}__clip_1"
+        (d.REVIEW / f"{stem}.mp4").write_bytes(b"x"); (d.REVIEW / f"{stem}.json").write_text(json.dumps(extra)); return stem
+    def at(minutes):
+        return {"at": (now + dtm.timedelta(minutes=minutes)).isoformat(timespec="minutes"), "mode": "public"}
+    due, late, future, busy, plain = clip(1, scheduled=at(-3)), clip(2, scheduled=at(-40)), clip(3, scheduled=at(90)), clip(4, scheduled=at(-1)), clip(5)
+    d.REVIEW_STATUS[busy] = {"state": "posting"}
+    posted = []
+    class Inline:  # runs the posting "thread" right away so the test can look at the result
+        def __init__(self, target=None, args=(), daemon=None): self.t, self.a = target, args
+        def start(self): self.t(*self.a)
+    d.review_post = lambda stem, mode="private": posted.append((stem, mode)); d.threading.Thread = Inline
+    info = lambda st: json.loads((d.REVIEW / f"{st}.json").read_text())
+    try:
+        started = d.sched_tick(now)
+        assert started == [due] and posted == [(due, "public")], (started, posted)  # only the one that is due now is posted, with its own visibility
+        assert "scheduled" not in info(due) and "scheduled" not in info(late) and info(late)["schedule_missed"] == at(-40)["at"]  # a missed time is dropped, never posted late by surprise
+        assert info(future)["scheduled"]["at"] == at(90)["at"] and info(busy).get("scheduled")  # the future one waits; a clip that is posting right now is left alone
+        d.threading.Thread = keep[3]
+        for bad_at, mode in (((dtm.datetime.now() - dtm.timedelta(hours=1)).isoformat(), "private"), ((dtm.datetime.now() + dtm.timedelta(hours=1)).isoformat(), "secret")):
+            try:
+                d.review_schedule(plain, bad_at, mode); raise AssertionError("should have been refused")
+            except ValueError:
+                pass
+        d.review_schedule(plain, (dtm.datetime.now() + dtm.timedelta(hours=2)).isoformat(), "private")
+        assert info(plain)["scheduled"]["mode"] == "private"
+        d.review_unschedule(plain); assert "scheduled" not in info(plain)
+        # mark as not posted: the marker and the stale "Posted." line go
+        (d.REVIEW / f"{plain}.posted.json").write_text(json.dumps({"youtube": "http://y", "tiktok": "posted"})); d.REVIEW_STATUS[plain] = {"state": "done", "msg": "Posted."}
+        d.review_unpost(plain)
+        assert not (d.REVIEW / f"{plain}.posted.json").exists() and plain not in d.REVIEW_STATUS
+        d.REVIEW_STATUS[plain] = {"state": "done", "msg": "Posted."}; d.review_items()  # a stale 'done' status without a posted marker is dropped when the list is built
+        assert plain not in d.REVIEW_STATUS
+    finally:
+        d.REVIEW, d.review_post, d.threading.Thread = keep[0], keep[1], keep[3]; d.REVIEW_STATUS.clear(); d.REVIEW_STATUS.update(keep[2])
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

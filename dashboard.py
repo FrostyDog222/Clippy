@@ -670,10 +670,12 @@ def review_items():
             mf = REVIEW / (f.stem.replace("clip_", "meta_") + ".json")
             meta = json.loads(mf.read_text(encoding="utf-8")) if mf.exists() else {}
             sf = REVIEW / (f.stem + ".posted.json")
+            if (REVIEW_STATUS.get(f.stem) or {}).get("state") == "done" and not sf.exists():  # marked as not posted (or re-cut): the old "Posted." line must go
+                REVIEW_STATUS.pop(f.stem, None)
             et, ed, eg = split_meta(meta)
             out.append({"id": f.stem, "title": meta.get("yt_title", ""), "desc": meta.get("yt_description", ""), "caption": meta.get("tiktok_caption", ""),
                         "edit_title": et, "edit_desc": ed, "edit_tags": " ".join(eg), "edit_tiktok": meta.get("tiktok_custom", ""), "edited": bool(meta.get("edited")),
-                        "seconds": d.get("seconds"), "layout": d.get("layout"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
+                        "seconds": d.get("seconds"), "layout": d.get("layout"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
                         "posted": json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {}, "status": REVIEW_STATUS.get(f.stem)})
         except Exception:
             continue
@@ -742,6 +744,74 @@ def review_trim_reset(stem):
         d["seconds"] = d["orig_seconds"]
     d.pop("trim", None); d.pop("orig_seconds", None)
     cj.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+SCHED_GRACE = 15  # minutes: a schedule that is overdue by more than this (Clippy was closed / the PC asleep) is NOT posted by itself any more
+
+
+def review_schedule(stem, at, mode):
+    """Put a time on a clip in Ready to post: the scheduler below posts it then (with the chosen visibility)."""
+    cj = REVIEW / (stem + ".json")
+    if not cj.exists():
+        raise ValueError("clip not found")
+    when = dt.datetime.fromisoformat(str(at)[:16])
+    if when <= dt.datetime.now() + dt.timedelta(minutes=1):
+        raise ValueError("choose a time in the future")
+    if mode not in ("private", "public"):
+        raise ValueError("bad visibility")
+    d = json.loads(cj.read_text(encoding="utf-8"))
+    d["scheduled"] = {"at": when.isoformat(timespec="minutes"), "mode": mode}; d.pop("schedule_missed", None)
+    cj.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def review_unschedule(stem):
+    cj = REVIEW / (stem + ".json")
+    if cj.exists():
+        d = json.loads(cj.read_text(encoding="utf-8")); d.pop("scheduled", None); d.pop("schedule_missed", None)
+        cj.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def review_unpost(stem):
+    """'Mark as not posted': the clip gets its Post button back (the video that is already online is NOT touched: if it is not deleted there, posting again uploads it twice)."""
+    (REVIEW / (stem + ".posted.json")).unlink(missing_ok=True)
+    REVIEW_STATUS.pop(stem, None)
+
+
+def sched_tick(now=None):
+    """Post the clips whose scheduled time has come. A time that was missed by more than SCHED_GRACE minutes is dropped (and shown as missed), never posted late by surprise."""
+    now = now or dt.datetime.now(); started = []
+    for f in (sorted(REVIEW.glob("*__clip_*.json")) if REVIEW.exists() else []):
+        if f.name.endswith(".posted.json") or not STEM.match(f.stem):
+            continue
+        try:
+            d = json.loads(f.read_text(encoding="utf-8")); sc = d.get("scheduled")
+            if not sc:
+                continue
+            at = dt.datetime.fromisoformat(sc["at"])
+            if at > now:
+                continue
+            if (REVIEW_STATUS.get(f.stem) or {}).get("state") == "posting":
+                continue
+            d.pop("scheduled", None)
+            if (now - at) > dt.timedelta(minutes=SCHED_GRACE):
+                d["schedule_missed"] = sc["at"]
+            else:
+                d["scheduled_run"] = now.isoformat(timespec="seconds"); started.append((f.stem, sc.get("mode", "private")))
+            f.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+        except Exception:
+            continue
+    for stem, mode in started:
+        threading.Thread(target=review_post, args=(stem, mode), daemon=True).start()
+    return [x[0] for x in started]
+
+
+def sched_loop():
+    while True:
+        time.sleep(30)
+        try:
+            sched_tick()
+        except Exception:
+            pass
 
 
 def review_post(stem, mode="private"):
@@ -960,6 +1030,22 @@ class H(http.server.BaseHTTPRequestHandler):
                 review_edit(stem, body.get("title", ""), body.get("description", ""), str(body.get("hashtags", "")).split(), body.get("tiktok", ""))
             except ValueError as e:
                 return self.send(400, str(e), "text/plain")
+        elif self.path in ("/api/review/schedule", "/api/review/schedule/cancel", "/api/review/unpost"):
+            try:
+                body = json.loads(self.rfile.read(n)); stem = body["id"]; assert STEM.match(stem)
+            except Exception:
+                return self.send(400, "bad id", "text/plain")
+            if (REVIEW_STATUS.get(stem) or {}).get("state") == "posting":
+                return self.send(409, "This clip is being posted right now", "text/plain")
+            try:
+                if self.path.endswith("cancel"):
+                    review_unschedule(stem)
+                elif self.path.endswith("unpost"):
+                    review_unpost(stem)
+                else:
+                    review_schedule(stem, body["at"], body.get("mode", "private"))
+            except (ValueError, KeyError, TypeError) as e:
+                return self.send(400, str(e) or "bad values", "text/plain")
         elif self.path in ("/api/review/trim", "/api/review/trim/reset"):  # cut a few seconds off a finished clip (or go back to the full clip)
             try:
                 body = json.loads(self.rfile.read(n)); stem = body["id"]; assert STEM.match(stem)
@@ -1076,6 +1162,7 @@ if __name__ == "__main__":
         threading.Thread(target=ytdlp_loop, daemon=True).start()
         threading.Thread(target=update_loop, daemon=True).start()
         threading.Thread(target=autopilot_loop, daemon=True).start()
+        threading.Thread(target=sched_loop, daemon=True).start()
         threading.Thread(target=live_loop, daemon=True).start()
         threading.Thread(target=stats_loop, daemon=True).start()
     print(f"Clippy dashboard on http://127.0.0.1:{PORT}  (Ctrl+C to stop)")
