@@ -430,6 +430,7 @@ def clean(new, old):
     out["creators"] = [str(s)[:60] for s in new["creators"]][:50]
     out["use_trending_fallback"] = bool(new["use_trending_fallback"])
     out["trending_any"] = bool(new.get("trending_any", False))
+    out["display_name"] = re.sub(r"\s+", " ", str(new.get("display_name", ""))).strip()[:40]  # the name in the welcome line
     out["auto_post"] = bool(new.get("auto_post", False))  # OFF (default): finished clips wait in "Ready to post" until the Post button is pressed
     out["post_youtube"] = bool(new.get("post_youtube", True)); out["post_tiktok"] = bool(new.get("post_tiktok", True))  # where to post
     out["topic"] = re.sub(r"\s+", " ", str(new.get("topic", "GTA 6"))).strip()[:60]  # what to look for (a game or any subject); empty = no topic
