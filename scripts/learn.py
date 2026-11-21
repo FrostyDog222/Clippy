@@ -26,7 +26,7 @@ def load():
             last[r["id"]] = r  # the newest rating of a clip wins
         except Exception:
             pass
-    return [r for r in last.values() if r.get("rating") in (1, -1)]
+    return [r for r in last.values() if r.get("rating") in (1, -1, 0) and r.get("features")]  # 0 = meh (also a removed clip nobody rated)
 
 
 def load_all():

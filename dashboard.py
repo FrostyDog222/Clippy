@@ -579,6 +579,13 @@ def review_edit(stem, title, desc, tags, tiktok=""):
     mf.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def log_rating(stem, d, rating, removed=False):
+    """One line in ratings.jsonl (local only): the clip's rating (+1 stood out good, -1 stood out bad, 0 meh) with the signals behind it. The log outlives the clip."""
+    with open(R / "ratings.jsonl", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"id": stem, "rating": rating, "ts": dt.datetime.now().isoformat(timespec="seconds"), "rank": d.get("rank"), "features": d.get("features"),
+                             "seconds": d.get("seconds"), "creator": d.get("creator"), **({"removed": True} if removed else {})}, ensure_ascii=False) + chr(10))
+
+
 def review_items():
     review_purge()
     out = []
@@ -807,9 +814,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 body = json.loads(self.rfile.read(n)); stem = body["id"]; assert STEM.match(stem) and body["rating"] in (-1, 0, 1)
                 cf = REVIEW / (stem + ".json"); d = json.loads(cf.read_text(encoding="utf-8")); d["rating"] = body["rating"]
                 cf.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
-                with open(R / "ratings.jsonl", "a", encoding="utf-8") as fh:
-                    fh.write(json.dumps({"id": stem, "rating": body["rating"], "ts": dt.datetime.now().isoformat(timespec="seconds"), "rank": d.get("rank"), "features": d.get("features"),
-                                         "seconds": d.get("seconds"), "creator": d.get("creator")}, ensure_ascii=False) + "\n")
+                log_rating(stem, d, body["rating"])
             except Exception:
                 return self.send(400, "bad rating", "text/plain")
         elif self.path in ("/api/review/post", "/api/review/remove"):
@@ -825,6 +830,14 @@ class H(http.server.BaseHTTPRequestHandler):
                     return self.send(404, "clip not found", "text/plain")
                 threading.Thread(target=review_post, args=(stem, vis), daemon=True).start()
             else:
+                try:  # removing a clip nobody rated and nobody posted = "meh": keep that as a learning example (the clip's signals are deleted with it)
+                    cf, pf = REVIEW / (stem + ".json"), REVIEW / (stem + ".posted.json")
+                    d = json.loads(cf.read_text(encoding="utf-8")) if cf.exists() else {}
+                    posted = pf.exists() and any(json.loads(pf.read_text(encoding="utf-8")).values())
+                    if d.get("features") and not d.get("rating") and not posted:
+                        log_rating(stem, d, 0, removed=True)
+                except Exception:
+                    pass
                 (REVIEW / (stem + ".json")).unlink(missing_ok=True)  # the info file first: the clip leaves the list at once, even if the video is still locked
                 for f in [REVIEW / (stem.replace("clip_", "meta_") + ".json")] + [g for g in REVIEW.glob(stem + ".*")]:
                     review_unlink(f)  # a locked video is retried now and purged later (review_purge) if it still cannot go

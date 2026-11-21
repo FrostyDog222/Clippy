@@ -161,6 +161,33 @@ def test_prepare_only_schedule():
         d.REVIEW, d.read_posts = keep
 
 
+def test_removed_clips_teach_meh():
+    import http.server, json, sys, tempfile, threading, urllib.request
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    tmp = Path(tempfile.mkdtemp()); (tmp / "review").mkdir()
+    keep = (d.R, d.REVIEW); d.R, d.REVIEW = tmp, tmp / "review"
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 8797), d.H); threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        def clip(i, **extra):
+            stem = f"1795999{i:03d}__clip_1"
+            (d.REVIEW / f"{stem}.mp4").write_bytes(b"x")
+            (d.REVIEW / f"{stem}.json").write_text(json.dumps({"rank": 8, "features": {"win": 7}, "seconds": 30, "creator": "X", **extra}))
+            return stem
+        def remove(stem):
+            rq = urllib.request.Request("http://127.0.0.1:8797/api/review/remove", data=json.dumps({"id": stem}).encode(), method="POST", headers={"Content-Type": "application/json"})
+            assert urllib.request.urlopen(rq).status == 200
+        meh, rated, posted, nosig = clip(1), clip(2, rating=1), clip(3), clip(4)
+        (d.REVIEW / f"{posted}.posted.json").write_text(json.dumps({"youtube": "http://y"}))
+        (d.REVIEW / f"{nosig}.json").write_text(json.dumps({"rank": 5}))  # an old clip without saved signals
+        for st in (meh, rated, posted, nosig):
+            remove(st)
+        rows = [json.loads(x) for x in (tmp / "ratings.jsonl").read_text().splitlines()]
+        assert [(r["id"], r["rating"], r.get("removed")) for r in rows] == [(meh, 0, True)], rows  # only the unrated, unposted clip with signals
+    finally:
+        srv.shutdown(); d.R, d.REVIEW = keep
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""
