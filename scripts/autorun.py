@@ -217,7 +217,9 @@ def strong_candidates(v):
                     nxt += 1
             cj.write_text(json.dumps(cd, ensure_ascii=False, indent=1), encoding="utf-8")
         if (v.get("twitch") or (v.get("custom") and cd.get("duration", 999) <= 120)) and not any(c.get("strong") for c in cands) and cd.get("duration"):  # a viewer-made clip IS the moment: the whole clip is the candidate
-            cands.append({"n": max([c["n"] for c in cands] or [0]) + 1, "start": 0.0, "end": round(float(cd["duration"]), 1), "peak": int(cd["duration"] / 2), "score": 5.0, "strong": True,
+            vw = max(1, int(v.get("views") or 1))  # viewers pressed "clip" on it: more views = a better moment (4.0 at 50 views up to 6.0 at 5000+)
+            cands.append({"n": max([c["n"] for c in cands] or [0]) + 1, "start": 0.0, "end": round(float(cd["duration"]), 1), "peak": int(cd["duration"] / 2),
+                          "score": round(4.0 + min(2.0, max(0.0, __import__("math").log10(vw / 50))), 2), "strong": True,
                           "why": [f"Twitch clip with {v['views']} views"], "text": " ".join(w["w"] for w in json.loads((job / "transcript.json").read_text(encoding="utf-8")))[:400], "sig": {}})
             cj.write_text(json.dumps(cd, ensure_ascii=False, indent=1), encoding="utf-8")
         for c in cands:
@@ -255,6 +257,7 @@ def face_motion(clip):
     return float(np.abs(np.diff(fr, axis=0)).mean()) if len(fr) > 1 else 0.0
 
 
+MUSIC = re.compile(r"[♪♫]|^[\[(]\s*(music|singing|song)\s*[\])]$", re.I)
 COMPILATION = re.compile(r"\b(compilation|funniest moments|funny moments|best moments|best of|montage)\b", re.I)
 NEAR = None  # the closest moment of this run that missed the bar: used (for review only) when nothing else was found
 MIN_FACE_COVERAGE = 0.75  # share of sampled frames whose webcam panel really shows a face (the streamer may switch OBS scenes mid-clip)
@@ -354,6 +357,12 @@ def judge(v, score, job, n, c, creator):
         pen.append((1.0, f"viral score {score} is under 5"))
     if COMPILATION.search(v.get("title", "")):  # a compilation is already edited (changing webcam layout, cuts mid-moment) and is the "reused content" risk
         pen.append((1.5, "source is a compilation"))
+    try:  # licensed music in the clip (Content ID / takedown risk): the transcript shows it as music notes or [Music]
+        _w = json.loads((job / "transcript.json").read_text(encoding="utf-8"))
+        if sum(1 for w in _w if c["start"] <= w["s"] < c["end"] and MUSIC.search(w["w"])) >= 3:
+            log("  music is playing in this moment (copyright risk), skipping"); return None
+    except Exception:
+        pass
     cut_range = []
     win = None
     scene, win_score, res_score = None, None, None
@@ -366,6 +375,8 @@ def judge(v, score, job, n, c, creator):
             win = None; log(f"  AI bit finder unavailable ({str(e)[:60]})")
         if not win and strict and ORIGIN != "live" and CFG.get("title_writer") == "api":  # nothing real judged this moment (no AI answer): the local score alone is not enough
             pen.append((1.0, "no AI read of what is said"))
+        if not win and str((c.get("why") or [""])[0]).startswith("ranked by the AI"):  # a raw window the bit finder could not trim (often a minute of stream): only a fallback
+            pen.append((2.0, "untrimmed AI window"))
         if win:
             ws, we = win["start"], win["end"]
             log(f"  AI bit finder: {c['start']:.0f}-{c['end']:.0f}s -> {ws:.0f}-{we:.0f}s ({we - ws:.0f}s) score {win['score']:g}/10, speaker {win['speaker']}, "
@@ -428,7 +439,8 @@ def judge(v, score, job, n, c, creator):
     rank = adj + score * 0.3  # AI judgement first (minus penalties), the local viral score second
     if pen:
         log("  penalties: " + "; ".join(f"-{p:g} {w}" for p, w in pen) + f" -> rank {rank:.1f}")
-    return {"c": c, "cut_range": cut_range, "scene": scene, "rank": rank, "weak": adj < 4.5}  # weak = only a fallback for a run that would otherwise find nothing
+    feat = {"win": win_score, "frames": res_score, "ai": c.get("ai"), "score": score, "penalty": round(sum(p for p, _ in pen), 2), "sig": c.get("sig"), "why": c.get("why")}
+    return {"c": c, "cut_range": cut_range, "scene": scene, "rank": rank, "weak": adj < 4.5, "feat": feat}  # weak = only a fallback for a run that would otherwise find nothing
 
 
 def reject(st, sf, vid):
@@ -500,7 +512,8 @@ def try_candidate(v, score, job, n, c, creator, dry, memo=None, review_only=Fals
         return None
     try:  # short catchy description: the AI one-liner goes into clip_N.json, make_meta.py uses it (no transcript text in descriptions); a stale meta file is dropped
         cj = clip.with_suffix(".json"); d0 = json.loads(cj.read_text(encoding="utf-8")); d0["blurb"] = blurb or ""
-        d0.update({"source_id": v["id"], "origin": ORIGIN, "score": score, "creator": creator or "", "seconds": round(d0.get("end", 0) - d0.get("start", 0), 1)})
+        d0.update({"source_id": v["id"], "origin": ORIGIN, "score": score, "creator": creator or "", "seconds": round(d0.get("end", 0) - d0.get("start", 0), 1),
+                   "rank": round(jd["rank"], 2), "features": jd.get("feat")})  # the signals behind this clip: logged with the user's rating to learn what works
         cj.write_text(json.dumps(d0, ensure_ascii=False, indent=1), encoding="utf-8")
         clip.with_name(clip.name.replace("clip_", "meta_")).with_suffix(".json").unlink(missing_ok=True)
     except Exception as e:
@@ -518,9 +531,28 @@ def try_candidate(v, score, job, n, c, creator, dry, memo=None, review_only=Fals
     return r.returncode
 
 
+PENDING = []  # (video, creator, judged moments) of videos that were good but not great: the best of all of them is cut at the end
+GOOD_RANK, MAX_COMPARE = 8.0, 3
+
+
+def cut_pending(dry):
+    """Cut the best-ranked moment over all videos judged so far (the next-best one when a cut fails)."""
+    allj = [(rank, v, creator, score, job, n, jd) for v, creator, judged in PENDING for rank, score, job, n, jd in judged]
+    PENDING.clear()
+    for rank, v, creator, score, job, n, jd in sorted(allj, key=lambda x: -x[0]):
+        log(f"  best-ranked moment {n} of '{v['title'][:40]}' (rank {rank:.1f})")
+        code = try_candidate(v, score, job, n, jd["c"], creator, dry, memo=jd)
+        if code is not None:
+            return code
+    return None
+
+
 def try_videos(vids, st, sf, dry, base_pct, creator=None):
     """Analyse videos in order; for each, try its 3 best strong moments. Returns an exit code if it posted/dry-ran, else None."""
     for v in vids:
+        bl = [norm(x) for x in re.split(r"[,;\n]", str(CFG.get("blocked_streamers", ""))) if norm(x)]  # streamers the user never wants clipped (Settings > Streamers)
+        if not v.get("custom") and any(b in norm(v.get("channel", "")) or b in norm(v.get("title", "")) for b in bl):
+            log(f"  skipping {v['title'][:50]}: on your 'never clip' list"); continue
         progress(base_pct, f"Analysing: {v['channel']} - {v['title'][:50]}")
         log(f"  analysing {v['id']} ({v['duration'] // 60} min, {v['views']} views) {v['title'][:60]}")
         cands = strong_candidates(v)
@@ -540,7 +572,16 @@ def try_videos(vids, st, sf, dry, base_pct, creator=None):
                 judged.append((jd["rank"], score, job, n, jd))
             elif jd:
                 weak.append((jd["rank"], v, score, job, n, jd, creator))
-        want, made = ((CUSTOM or {}).get("clips", 1) if v.get("custom") else 1), 0  # a normal run makes one clip per video; a link can ask for several
+        if judged and not v.get("custom"):  # compare across videos: stop at a clearly good moment, else look at up to 3 videos and cut the best of all
+            PENDING.append((v, creator, judged))
+            best = max(j[0] for j in judged)
+            log(f"  best moment of this video: rank {best:.1f}" + ("" if best >= GOOD_RANK else f" (below {GOOD_RANK:g}: also looking at other videos)"))
+            if best >= GOOD_RANK or len(PENDING) >= MAX_COMPARE:
+                code = cut_pending(dry)
+                if code is not None:
+                    return code
+            continue
+        want, made = ((CUSTOM or {}).get("clips", 1) if v.get("custom") else 1), 0  # a link can ask for several clips
         for rank, score, job, n, jd in sorted(judged, key=lambda x: -x[0]):
             log(f"  best-ranked moment {n} (rank {rank:.1f})")
             code = try_candidate(v, score, job, n, jd["c"], creator, dry, memo=jd)
@@ -701,6 +742,10 @@ def _main():
         vids = [v for v in vids if v["id"] == a.only] if a.only else vids
         log(f"  {len(vids)} trending candidates: " + ", ".join(v["channel"] for v in vids))
         code = try_videos(vids, st, sf, a.dry, 35)
+        if code is not None:
+            return code
+    if PENDING:  # good moments were found but none was great: cut the best of all
+        code = cut_pending(a.dry)
         if code is not None:
             return code
     if NEAR and not a.dry:  # nothing passed: the closest moment goes to "Ready to post" (never posted by itself) so the user decides

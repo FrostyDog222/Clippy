@@ -431,6 +431,7 @@ def clean(new, old):
     out["use_trending_fallback"] = bool(new["use_trending_fallback"])
     out["trending_any"] = bool(new.get("trending_any", False))
     out["display_name"] = re.sub(r"\s+", " ", str(new.get("display_name", ""))).strip()[:40]  # the name in the welcome line
+    out["blocked_streamers"] = ", ".join(x.strip() for x in re.split(r"[,;\n]", str(new.get("blocked_streamers", ""))) if x.strip())[:300]  # streamers that are never clipped
     out["auto_update"] = bool(new.get("auto_update", True))  # install new Clippy versions by itself (settings and clips are never touched)
     out["auto_post"] = bool(new.get("auto_post", False))  # OFF (default): finished clips wait in "Ready to post" until the Post button is pressed
     out["post_youtube"] = bool(new.get("post_youtube", True)); out["post_tiktok"] = bool(new.get("post_tiktok", True))  # where to post
@@ -557,7 +558,7 @@ def review_items():
             et, ed, eg = split_meta(meta)
             out.append({"id": f.stem, "title": meta.get("yt_title", ""), "desc": meta.get("yt_description", ""), "caption": meta.get("tiktok_caption", ""),
                         "edit_title": et, "edit_desc": ed, "edit_tags": " ".join(eg), "edit_tiktok": meta.get("tiktok_custom", ""), "edited": bool(meta.get("edited")),
-                        "seconds": d.get("seconds"), "layout": d.get("layout"), "creator": d.get("source_channel"), "source": d.get("source_title"),
+                        "seconds": d.get("seconds"), "layout": d.get("layout"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0),
                         "posted": json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {}, "status": REVIEW_STATUS.get(f.stem)})
         except Exception:
             continue
@@ -764,6 +765,16 @@ class H(http.server.BaseHTTPRequestHandler):
                 review_edit(stem, body.get("title", ""), body.get("description", ""), str(body.get("hashtags", "")).split(), body.get("tiktok", ""))
             except ValueError as e:
                 return self.send(400, str(e), "text/plain")
+        elif self.path == "/api/review/rate":  # thumbs up / down on a clip: kept with the signals behind it (ratings.jsonl, local only) to learn what works
+            try:
+                body = json.loads(self.rfile.read(n)); stem = body["id"]; assert STEM.match(stem) and body["rating"] in (-1, 0, 1)
+                cf = REVIEW / (stem + ".json"); d = json.loads(cf.read_text(encoding="utf-8")); d["rating"] = body["rating"]
+                cf.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+                with open(R / "ratings.jsonl", "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"id": stem, "rating": body["rating"], "ts": dt.datetime.now().isoformat(timespec="seconds"), "rank": d.get("rank"), "features": d.get("features"),
+                                         "seconds": d.get("seconds"), "creator": d.get("creator")}, ensure_ascii=False) + "\n")
+            except Exception:
+                return self.send(400, "bad rating", "text/plain")
         elif self.path in ("/api/review/post", "/api/review/remove"):
             try:
                 body = json.loads(self.rfile.read(n)); stem = body["id"]; assert STEM.match(stem)

@@ -187,6 +187,35 @@ def chat_series(d, n, chat_arg, info, offset=0):
     return tot, react
 
 
+def laugh_audio(wav, n):
+    """Laughter from the sound itself (the transcript almost never contains 'haha'): laughing is a burst train, about 4-5 bursts per second with deep
+    on/off swings in loudness. Per second 0..2 = how strongly the last 1.5 s look like that. Pure numpy (loudness envelope every 50 ms, then its periodicity)."""
+    with wave.open(str(wav)) as w:
+        x = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
+    hop, win = 800, 30
+    m = len(x) // hop
+    out = np.zeros(n)
+    if m < win + 2:
+        return out
+    e = np.sqrt((x[:m * hop].reshape(m, hop) ** 2).mean(1)) + 1e-6
+    le = np.log(e); le = le - smooth(le, 20)  # the swings only, not the slow level
+    for i in range(0, m - win, 5):
+        seg = le[i:i + win] - le[i:i + win].mean()
+        var = float((seg ** 2).mean())
+        if var < LAUGH_VAR or e[i:i + win].mean() < 0.01:  # not modulated enough / too quiet
+            continue
+        ac = np.correlate(seg, seg, "full")[win - 1:] / (var * win)
+        per = float(ac[4:8].max())  # a burst every 0.2-0.35 s
+        if per > LAUGH_PER:
+            t = int(i * 0.05 + 0.75)
+            if t < n:
+                out[t] = max(out[t], min(2.0, (per - LAUGH_PER) * 5 + 0.5))
+    return smooth(out, 3) * 3  # smoothed over a few seconds
+
+
+LAUGH_VAR, LAUGH_PER = 0.15, 0.35
+
+
 def z(a):
     a = np.asarray(a, dtype=float)
     if a.std() < 1e-9:
@@ -258,6 +287,10 @@ def main():
         if SWEAR.search(w["w"]): swear[t] += 1
         if NOVEL.search(w["w"]): novel[t] += 1
     laugh, swear, novel = np.clip(smooth(laugh, 4) * 2, 0, 3), np.clip(smooth(swear, 4) * 3, 0, 2), np.clip(smooth(novel, 5) * 3, 0, 2)  # sparse events: raw strength, not z-scores
+    try:  # laughing (and rapid excited bursts) heard in the sound, since the transcript rarely writes "haha": a light extra, never decisive on its own
+        laugh = np.maximum(laugh, 0.35 * np.clip(laugh_audio(wav, n), 0, 2))
+    except Exception as e:
+        print(f"laughter detection unavailable ({str(e)[:60]})")
     rate_z = smooth(np.clip(z(smooth(wps, 3)), 0, None), 2)
     speaking = np.zeros(n)
     for w in words:
@@ -323,7 +356,7 @@ def main():
         e0 = min(e0, s0 + a.max)
         if used[int(s0):int(e0)].any():
             continue
-        used[int(s0):int(e0)] = True
+        used[max(0, int(s0) - 12):int(e0) + 12] = True  # picks stay at least 12 s apart: no two clips of the same moment
         text = " ".join(x["w"] for x in words if s0 <= x["s"] < e0)
         if len(TALK.findall(text)) >= 2:  # the streamer is talking to chat / about the stream, not reacting to something in the game
             continue
@@ -332,8 +365,11 @@ def main():
         ctx = " ".join(x["w"] for x in words if s0 - 45 <= x["s"] < e0 + 45)  # speech around the moment
         hits = len(GAME.findall(ctx))
         bonus = (0.2 * min(hits, 3) - (0.8 if hits == 0 and len(ctx.split()) >= 25 else 0.0)) if GTA_TOPIC else 0.0  # the word bonus is written for GTA; other topics get none  # in the game = a little more, long non-game talk = a little less
-        final = float(score[p]) + bonus
+        agree = sum(1 for arr, th in ((chatz, 1.0), (loud, 1.0), (voice, 1.0), (heat, 0.5), (motion, 3.0)) if arr[near].max() > th)  # independent signals that fire together
+        agree += 1 if laugh[near].max() > 0.5 else 0
+        final = float(score[p]) + bonus + min(1.05, 0.35 * max(0, agree - 1))  # one signal alone is easy to fool (a raid, a loud game sound): agreement is worth more
         why = []
+        if agree >= 3: why.append(f"{agree} signals agree")
         if loud[p] > 1: why.append("loudness spike")
         if hype[p] > 0: why.append("hype words")
         if motion[p] > 1: why.append("action on screen")

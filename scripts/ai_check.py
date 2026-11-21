@@ -92,6 +92,9 @@ def ask_api(cfg, imgs, prompt0):
         return _none(f"API call failed (does the model accept images?): {str(e)[:80]}")
 
 
+FILLER = {"so", "um", "uh", "okay", "ok", "alright", "yeah", "hey", "guys", "well", "like", "and", "but", "right"}
+
+
 def refine_window(cfg, words, start, end, max_len, min_len=12):
     """Ask the AI (text only, the title model) where the bit around [start, end] really begins and ends, reading what is said, silences included.
     A quiet stretch is often the beat before the next joke or an awkward reaction, so it does not end the moment by itself. Returns a dict with start / end
@@ -136,8 +139,17 @@ def refine_window(cfg, words, start, end, max_len, min_len=12):
         break
     if j is None:
         return None
-    before = [w["s"] for w in words if w["s"] <= s + 0.3]
-    s2 = max(0.0, (before[-1] if before else s) - 0.3)
+    idx = max((i for i, w in enumerate(words) if w["s"] <= s + 0.3), default=None)
+    if idx is None:
+        s2 = max(0.0, s - 0.3)
+    else:  # open on the beginning of the sentence the bit starts in (up to 3.5 s back), and skip filler openers ("so", "okay", "hey guys")
+        q = idx
+        while q > 0 and words[idx]["s"] - words[q - 1]["s"] < 3.5 and not (words[q - 1]["w"].strip().endswith((".", "?", "!")) or words[q]["s"] - words[q - 1]["e"] > 0.6):
+            q -= 1
+        k = q
+        while k < idx and words[k]["w"].strip(" ,.!?").lower() in FILLER and words[k + 1]["s"] - words[k]["e"] < 1.0:
+            k += 1
+        s2 = max(0.0, words[k]["s"] - 0.3)
     e2 = e + 0.5
     ends = []  # end at the end of a SENTENCE (punctuation, or a pause after the word), never in the middle of one: the nearest one to what the AI asked for
     for i, w in enumerate(words):
