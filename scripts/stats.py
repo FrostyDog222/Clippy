@@ -43,7 +43,7 @@ def tiktok_text(mode="headless"):
         upload.wait_cdp(upload.PORT)
         with sync_playwright() as p:
             b = p.chromium.connect_over_cdp(f"http://127.0.0.1:{upload.PORT}")
-            page = b.contexts[0].new_page()
+            page = upload.new_page_bg(b, b.contexts[0])
             try:
                 page.goto("https://www.tiktok.com/tiktokstudio/content", wait_until="domcontentloaded"); page.wait_for_timeout(7000)
                 upload.guard(page)

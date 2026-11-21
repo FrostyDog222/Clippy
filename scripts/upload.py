@@ -93,8 +93,9 @@ def start_chrome(port=None, only=None, mode=None):
             "--disable-domain-reliability", "--disable-client-side-phishing-detection", "--disable-breakpad", "--metrics-recording-only"]  # closing the window really ends this Chrome (no leftover background process holding the profile)
     if port:
         # No user-agent or automation-flag tricks: if a site blocks a mode, the run stops with a clear message.
-        args += [f"--remote-debugging-port={port}", "--window-size=1920,1080", "about:blank"]
         mode = mode or browser_mode()
+        # no start-up window: Chrome's first window takes the focus (a full-screen game would be pushed to the taskbar). The tab is opened later, in the background (new_page_bg).
+        args += [f"--remote-debugging-port={port}", "--window-size=1920,1080"] + (["--no-startup-window"] if mode in ("offscreen", "minimized") else ["about:blank"])
         # offscreen = normal Chrome window placed beyond the display edge (nothing visible, site sees an ordinary browser)
         args += (["--headless=new"] if mode == "headless" else ["--start-minimized"] if mode == "minimized"
                  else ["--window-position=-3000,0"] if mode == "offscreen" else [])
@@ -104,6 +105,17 @@ def start_chrome(port=None, only=None, mode=None):
     if port and sys.platform == "win32" and mode in ("offscreen", "minimized"):  # ask Windows to show the window WITHOUT taking focus (a game in front is not pushed to the taskbar)
         si = subprocess.STARTUPINFO(); si.dwFlags |= subprocess.STARTF_USESHOWWINDOW; si.wShowWindow = 7 if mode == "minimized" else 4  # SW_SHOWMINNOACTIVE / SW_SHOWNOACTIVATE
     return subprocess.Popen(args, startupinfo=si) if si else subprocess.Popen(args)
+
+
+def new_page_bg(browser, ctx):
+    """Open a tab WITHOUT activating its window (Target.createTarget background=true), so a game or video in front keeps the focus. Falls back to a normal tab."""
+    try:
+        s = browser.new_browser_cdp_session()
+        with ctx.expect_page(timeout=15000) as pi:
+            s.send("Target.createTarget", {"url": "about:blank", "background": True, "newWindow": True})
+        return pi.value
+    except Exception:
+        return ctx.new_page()
 
 
 def wait_cdp(port, secs=30):
@@ -269,7 +281,7 @@ def cmd_status():
             b = p.chromium.connect_over_cdp(f"http://127.0.0.1:{PORT}")
             ctx = b.contexts[0]
             for name, url in (("youtube", "https://studio.youtube.com"), ("tiktok", "https://www.tiktok.com/tiktokstudio/upload")):
-                page = ctx.new_page()
+                page = new_page_bg(b, ctx)
                 try:
                     page.goto(url, wait_until="domcontentloaded"); page.wait_for_timeout(4000); guard(page)
                     # logged in only counts if the real upload UI is there (an "unsupported browser" page is neither signed in nor out)
@@ -308,7 +320,7 @@ def cmd_post(a):
                              ("tiktok", lambda pg: tiktok(pg, clip, a.caption, a.mode == "public"))):
                 if a.only and a.only != name:
                     continue
-                page = ctx.new_page()
+                page = new_page_bg(b, ctx)
                 try:
                     res[name] = fn(page)
                     if "PRIVACY_CHECK" in str(res[name]):  # it WAS posted, but its privacy could not be confirmed: tell the user loudly
