@@ -343,11 +343,6 @@ def queue_for_review(clip):
     stem = f"{int(time.time())}__{clip.stem}"  # must keep "clip_N": post_clip.py derives the meta file name from it
     shutil.copy2(clip, REVIEW / f"{stem}.mp4")
     d = json.loads(clip.with_suffix(".json").read_text(encoding="utf-8")); d["file"] = str(REVIEW / f"{stem}.mp4")
-    try:
-        import safety_check
-        d["flags"] = safety_check.flags(d)  # a hint on the clip card, never a block
-    except Exception:
-        pass
     (REVIEW / f"{stem}.json").write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
     sh([PY, "scripts/make_meta.py", str(REVIEW / f"{stem}.json")])
     return stem

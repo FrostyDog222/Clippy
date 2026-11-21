@@ -629,6 +629,22 @@ def review_edit(stem, title, desc, tags, tiktok=""):
 WHY = ("boring", "nudity", "crop", "repeat", "other")  # why a clip was a 👎
 
 
+def review_remove(stem):
+    """Take a clip out of Ready to post (its video and files are deleted; this cannot be undone)."""
+    try:  # removing a clip nobody rated and nobody posted = "meh": keep that as a learning example (the clip's signals are deleted with it)
+        cf, pf = REVIEW / (stem + ".json"), REVIEW / (stem + ".posted.json")
+        d = json.loads(cf.read_text(encoding="utf-8")) if cf.exists() else {}
+        posted = pf.exists() and any(json.loads(pf.read_text(encoding="utf-8")).values())
+        if d.get("features") and not d.get("rating") and not posted:
+            log_rating(stem, d, 0, removed=True); learn_refit()
+    except Exception:
+        pass
+    (REVIEW / (stem + ".json")).unlink(missing_ok=True)  # the info file first: the clip leaves the list at once, even if the video is still locked
+    for f in [REVIEW / (stem.replace("clip_", "meta_") + ".json")] + [g for g in REVIEW.glob(stem + ".*")]:
+        review_unlink(f)  # a locked video is retried now and purged later (review_purge) if it still cannot go
+    REVIEW_STATUS.pop(stem, None)
+
+
 def clip_words(d):
     """The words spoken in a clip, from the transcript of the job it was cut from (found by the source video id and the clip's time range)."""
     sid, a, b = d.get("source_id"), float(d.get("start") or 0), float(d.get("end") or 0)
@@ -667,6 +683,9 @@ def review_recut(stem, layout):
         new = job / "edits" / f"clip_{pick}.mp4"
         if r.returncode != 0 or not new.exists():
             raise RuntimeError("The cut failed" + (" (no webcam found in this video?)" if layout == "facecam" else "") + ": " + (r.stderr or r.stdout or "")[-160:])
+        nj = json.loads((job / "edits" / f"clip_{pick}.json").read_text(encoding="utf-8"))
+        if nj.get("layout") and nj["layout"] != layout:  # cut.py fell back to another layout (no usable webcam): do not swap in a video the user did not ask for
+            raise RuntimeError(f"This video has no usable webcam, so the '{layout}' crop is not possible (it would have been '{nj['layout']}').")
         for _ in range(10):  # the page may still be holding the old video for a moment
             try:
                 shutil.copy2(new, REVIEW / (stem + ".mp4")); break
@@ -674,7 +693,6 @@ def review_recut(stem, layout):
                 time.sleep(1)
         else:
             raise RuntimeError("Could not replace the video (is it playing in another window?)")
-        nj = json.loads((job / "edits" / f"clip_{pick}.json").read_text(encoding="utf-8"))
         for k in ("trim", "orig_seconds"):
             d.pop(k, None)
         d["layout"] = layout; d["seconds"] = round(float(nj.get("end", d["end"])) - float(nj.get("start", d["start"])), 1)
@@ -759,7 +777,7 @@ def review_items():
             et, ed, eg = split_meta(meta)
             out.append({"id": f.stem, "title": meta.get("yt_title", ""), "desc": meta.get("yt_description", ""), "caption": meta.get("tiktok_caption", ""),
                         "edit_title": et, "edit_desc": ed, "edit_tags": " ".join(eg), "edit_tiktok": meta.get("tiktok_custom", ""), "edited": bool(meta.get("edited")),
-                        "seconds": d.get("seconds"), "layout": d.get("layout"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "flags": d.get("flags") or [], "reason": d.get("reason"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
+                        "seconds": d.get("seconds"), "layout": d.get("layout"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "reason": d.get("reason"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
                         "posted": json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {}, "status": REVIEW_STATUS.get(f.stem)})
         except Exception:
             continue
@@ -868,7 +886,7 @@ def plan_slots(now, n, per_day, start, end, gap, taken):
 
 
 def review_autoschedule(mode, now=None):
-    """Give every waiting clip (not posted, not scheduled), best rank first, a time that respects the daily limit and the posting window from Settings. Returns how many."""
+    """Give every waiting clip you liked (👍; not posted, not scheduled), best rank first, a time that respects the daily limit and the posting window from Settings. Returns how many."""
     if mode not in ("private", "public"):
         raise ValueError("bad visibility")
     now, c = now or dt.datetime.now(), read_cfg()
@@ -884,7 +902,7 @@ def review_autoschedule(mode, now=None):
             taken.append(dt.datetime.fromtimestamp(pf.stat().st_mtime))
         elif d.get("scheduled"):
             taken.append(dt.datetime.fromisoformat(d["scheduled"]["at"]))
-        else:
+        elif d.get("rating") == 1:  # only the clips you liked (👍) are spread out; the rest stay for you to look at
             todo.append((-(float(d.get("rank") or 0)), f.stem))
     todo.sort()
     slots = plan_slots(now, len(todo), int(c.get("posts_per_day", 6)), c.get("window_start", "09:00"), c.get("window_end", "22:30"), int(c.get("min_gap_minutes", 120)), taken)
@@ -1254,18 +1272,11 @@ class H(http.server.BaseHTTPRequestHandler):
                     return self.send(404, "clip not found", "text/plain")
                 threading.Thread(target=review_post, args=(stem, vis), daemon=True).start()
             else:
-                try:  # removing a clip nobody rated and nobody posted = "meh": keep that as a learning example (the clip's signals are deleted with it)
-                    cf, pf = REVIEW / (stem + ".json"), REVIEW / (stem + ".posted.json")
-                    d = json.loads(cf.read_text(encoding="utf-8")) if cf.exists() else {}
-                    posted = pf.exists() and any(json.loads(pf.read_text(encoding="utf-8")).values())
-                    if d.get("features") and not d.get("rating") and not posted:
-                        log_rating(stem, d, 0, removed=True); learn_refit()
-                except Exception:
-                    pass
-                (REVIEW / (stem + ".json")).unlink(missing_ok=True)  # the info file first: the clip leaves the list at once, even if the video is still locked
-                for f in [REVIEW / (stem.replace("clip_", "meta_") + ".json")] + [g for g in REVIEW.glob(stem + ".*")]:
-                    review_unlink(f)  # a locked video is retried now and purged later (review_purge) if it still cannot go
-                REVIEW_STATUS.pop(stem, None)
+                review_remove(stem)
+        elif self.path == "/api/review/remove_all":  # every clip in Ready to post (not the one being posted right now); cannot be undone
+            for f in list(REVIEW.glob("*__clip_*.json")):
+                if not f.name.endswith(".posted.json") and STEM.match(f.stem) and (REVIEW_STATUS.get(f.stem) or {}).get("state") != "posting":
+                    review_remove(f.stem)
         elif self.path == "/api/config":
             try:
                 c = clean(json.loads(self.rfile.read(n)), read_cfg())

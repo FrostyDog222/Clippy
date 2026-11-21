@@ -415,7 +415,7 @@ def test_scheduled_posting_and_mark_as_not_posted():
 def test_new_helpers_views_flags_slots_reason():
     import datetime as dtm, json, sys, tempfile
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import dashboard as d, views, safety_check, learn
+    import dashboard as d, views, learn
     # view counts: a hit, a miss and the middle; too few clips -> nothing
     rows = [{"id": str(i), "views": v, "features": {"a": 1}} for i, v in enumerate([100, 120, 110, 900, 20])]
     r = views.derived(rows)
@@ -430,8 +430,6 @@ def test_new_helpers_views_flags_slots_reason():
         assert views.refresh(lambda u: 777) == 1 and views.load()[0]["views"] == 777 and views.refresh(lambda u: 5) == 0
     finally:
         views.REVIEW, views.LOG = old
-    # adult words are flagged, normal text is not; swearing is never flagged
-    assert safety_check.flags({"hook": "Streamer finds a strip club"}) and not safety_check.flags({"hook": "holy f*** that crash"})
     # posting slots: respect the window, the gap and the daily limit (already-taken times count)
     now = dtm.datetime(2026, 11, 22, 8, 0)
     taken = [dtm.datetime(2026, 11, 22, 9, 0), dtm.datetime(2026, 11, 22, 11, 0)]
@@ -439,6 +437,16 @@ def test_new_helpers_views_flags_slots_reason():
     assert len(sl) == 5 and sl[0] == dtm.datetime(2026, 11, 22, 13, 0) and sl[1].date() == dtm.date(2026, 11, 23), sl  # 1 slot left today (limit 3), then a new day
     assert all(b - a >= dtm.timedelta(minutes=120) for a, b in zip(sl, sl[1:]) if a.date() == b.date())
     assert all(dtm.time(9, 0) <= x.time() <= dtm.time(22, 30) for x in sl)
+    # spreading clips over days only takes the liked (thumbs-up) ones, best rank first
+    tmp2 = Path(tempfile.mkdtemp()); keep = d.REVIEW; d.REVIEW = tmp2
+    try:
+        for i, (rk, rt) in enumerate([(5, 1), (9, 1), (8, 0), (7, -1)]):
+            st = f"17960000{i:02d}__clip_1"; (tmp2 / f"{st}.mp4").write_bytes(b"x"); (tmp2 / f"{st}.json").write_text(json.dumps({"rank": rk, "rating": rt}))
+        assert d.review_autoschedule("private", now=dtm.datetime(2026, 11, 22, 10, 0)) == 2
+        sch = {f.stem[8:10]: json.loads(f.read_text()).get("scheduled") for f in tmp2.glob("*.json")}
+        assert sch["01"]["at"] < sch["00"]["at"] and sch["02"] is None and sch["03"] is None, sch
+    finally:
+        d.REVIEW = keep
     # a thumbs-down for a reason that is not about the moment counts less in learning
     assert "nudity" in learn.OFF_MOMENT and "boring" not in learn.OFF_MOMENT and "boring" in d.WHY
 
