@@ -712,7 +712,7 @@ def test_live_log_clear_never_leaves_nul_bytes():
     keep = d.R; tmp = Path(tempfile.mkdtemp()); d.R = tmp
     try:
         (tmp / "live_watch.log").write_bytes(b"22:00:00 live watcher started" + bytes([10]) + b"old line" + bytes([10]))
-        (tmp / "autopost_config.json").write_text("{}")
+        (tmp / "autopost_config.json").write_text('{"live_watch": true}')
         d.CFG = tmp / "autopost_config.json"
         assert "old line" in d.log_text() or True
         (tmp / "live_log_mark.txt").write_text(str((tmp / "live_watch.log").stat().st_size))          # "Clear log" moves the mark
@@ -842,6 +842,24 @@ def test_langkit_rules():
     assert L.caption_plan({"language": "en", "p": 0.3}, W("ok yes"))["captions"]            # almost no words: nothing to doubt
     assert L.upper("istanbul ısı", "tr") == "İSTANBUL ISI" and L.upper("istanbul") == "ISTANBUL"
     assert L.font_for_script("cyrillic") is None and L.font_for_script("hangul", r"C:\nowhere") is None
+
+
+def test_language_reaction_words():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import langkit as L
+    ro = {"language": "ro", "p": 0.95}
+    assert L.reaction("naiba", ro) == "swear" and L.reaction("haha", ro) == "laugh" and L.reaction("incredibil", ro) == "hype"
+    assert L.reaction("naiba", {"language": "ro", "p": 0.5}) is None and L.reaction("naiba", {"language": "en", "p": 0.99}) is None   # unsure / English: untouched
+    assert L.reaction("hello", ro) is None
+
+
+def test_dislike_reasons_can_be_several_and_custom():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import learn
+    assert learn.off_moment({"reasons": ["crop", "audio"]}) and learn.off_moment({"reason": "nudity"})
+    assert not learn.off_moment({"reasons": ["crop", "boring"]}) and not learn.off_moment({"reasons": ["my own words"]}) and not learn.off_moment({})
 
 
 def test_titles_survive_bad_on_video_text():

@@ -12,6 +12,9 @@ Clippy learns **your** taste from the clips you rate. Press 👍 (stood out, goo
 ## Your learning file: keep it safe
 `ratings.jsonl`, `learned_weights.json`, `views.jsonl` and `seen_moments.jsonl` are the memory of your Clippy. They stay on your PC, are never uploaded and are not part of any update or release. Deleting a clip does NOT delete what Clippy learned from it. They are lost only if you delete the Clippy folder or press "Start fresh" in the History learning card, so use Settings, Backup, Download backup now and then (it holds your settings and these files, never your sign-ins or keys).
 
+## Languages
+English is what Clippy knows best. Other languages work too: pick them in Settings. Clippy reads the language from the speech and only trusts it at 80% or more. A moment counts as "in your language" when at least 25% of its words are, so a streamer who switches between their language and English still works, and the captions show every word. When Clippy is not sure of the language (and the words do not look English) the clip is made without captions, marked "language unsure" and never posted by itself. Every clip has a "Rebuild without captions" button. Reaction words (shock, laughs, swearing) are built in for 15 languages. Slurs in other languages are not filtered: that is your responsibility.
+
 ## Start
 1. Double-click `setup.bat` (installs into this folder only; asks before every download).
 2. Double-click `dashboard.bat`, sign in to YouTube and TikTok once (the Sign in button), pick your streamers, press Save.

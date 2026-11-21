@@ -18,11 +18,11 @@ FULL_AT = 30  # rated clips at which the learning is fully trusted
 MEH_CAP, MEH_WEIGHT = 2, 0.3  # at most 2 meh clips per rated one, and each counts about a third of a clip that stood out
 MAX_NUDGE, MAX_CHANNEL = 1.5, 0.6
 KEYS = ["win", "frames", "ai", "score", "penalty", "seconds", "twitch", "live", "views_log", "wps", "sig.loud", "sig.hype", "sig.motion", "sig.voice", "sig.laugh", "sig.swear",
-        "sig.novel", "sig.rate", "sig.chat", "sig.game"]
+        "sig.novel", "sig.rate", "sig.chat", "sig.game", "nonen"]
 LABELS = {"win": "the AI's funny / watchable score", "frames": "what the frames show", "ai": "the AI window score", "score": "the energy of the moment", "penalty": "few quality penalties",
           "seconds": "longer clips", "twitch": "clips viewers made on Twitch", "live": "clips from live streams", "views_log": "popular sources", "wps": "fast talking", "sig.loud": "loud moments",
           "sig.hype": "hype words", "sig.motion": "action on screen", "sig.voice": "an excited voice", "sig.laugh": "laughter", "sig.swear": "swearing",
-          "sig.novel": "unusual / glitchy things", "sig.rate": "fast speech", "sig.chat": "chat reactions", "sig.game": "talk about the game"}
+          "sig.novel": "unusual / glitchy things", "sig.rate": "fast speech", "sig.chat": "chat reactions", "sig.game": "talk about the game", "nonen": "speech that is not English"}
 
 
 def flat(d, pre=""):
@@ -33,7 +33,12 @@ def flat(d, pre=""):
             yield pre + k, float(v)
 
 
-OFF_MOMENT = ("nudity", "crop", "repeat")
+OFF_MOMENT = ("nudity", "crop", "repeat", "audio", "captions", "cutoff", "title", "language")  # reasons about the making, not about the moment
+
+
+def off_moment(r):
+    rs = r.get("reasons") or ([r["reason"]] if r.get("reason") else [])
+    return bool(rs) and all(x in OFF_MOMENT for x in rs)
 
 
 def channel_of(r):
@@ -67,7 +72,7 @@ def load_all():
         if not d.get("features"):
             continue  # clips from before the signals were saved cannot teach anything
         rows[f.stem] = {"id": f.stem, "rating": d.get("rating") if d.get("rating") in (1, -1) else 0, "rank": d.get("rank"), "features": d.get("features"),
-                        "seconds": d.get("seconds"), "creator": d.get("source_channel") or d.get("creator"), "reason": d.get("reason") if d.get("rating") == -1 else None}
+                        "seconds": d.get("seconds"), "creator": d.get("source_channel") or d.get("creator"), "reason": d.get("reason") if d.get("rating") == -1 else None, "reasons": d.get("reasons") if d.get("rating") == -1 else None}
     try:  # how the posted clips did (views.py): a weaker second teacher, only where the user did not rate the clip
         import views
         vr = views.load(); byid = {r["id"]: r for r in vr}
@@ -143,7 +148,7 @@ def fit(rows=None):
     y = np.array([r["rating"] for r in rows], dtype=float)
     sw = np.where(y == 0, MEH_WEIGHT, 1.0)  # meh is neutral: the clips that stood out drive the learning
     sw = sw * np.array([r.get("w", 1.0) for r in rows])
-    sw = np.where([r.get("reason") in OFF_MOMENT for r in rows], 0.35, sw)  # a 👎 for nudity / crop / a repeated joke says little about the MOMENT itself
+    sw = np.where([off_moment(r) for r in rows], 0.35, sw)  # a 👎 for nudity / crop / a repeated joke says little about the MOMENT itself
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # a signal that is missing in every clip is simply ignored
         mean = np.nanmean(X, axis=0)

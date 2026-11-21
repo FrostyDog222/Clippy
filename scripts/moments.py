@@ -60,6 +60,14 @@ def audio_rms(vid, d):
     return wav, 20 * np.log10(rms)
 
 
+def _xreact(word, lang):
+    try:
+        import langkit
+        return langkit.reaction(word, lang)
+    except Exception:
+        return None
+
+
 LAUGH = re.compile(r"^(ha+h*|hah+a*|he+h+e*|lol|lmao|lmfao|kek\w*)[,.!?]*$", re.I)
 NOVEL = re.compile(r"\b(glitch\w*|bug|bugged|physics|ragdoll\w*|launched|teleport\w*|stuck|impossible|never seen|how did|what happened|did you see|"
                    r"flying|floating|clipped|clipping|invincible|secret|easter egg|new)\b", re.I)
@@ -281,7 +289,7 @@ def main():
     loud = smooth(np.clip(z(db - smooth(db, 30)), 0, None), 3)          # jumps above the local level
     hype = np.zeros(n)
     for w in words:
-        if HYPE.search(w["w"]) and int(w["s"]) < n:
+        if int(w["s"]) < n and (HYPE.search(w["w"]) or _xreact(w["w"], lang) == "hype"):
             hype[int(w["s"])] += 1
     hype = smooth(hype, 5)
     heat = np.zeros(n)
@@ -308,8 +316,9 @@ def main():
         if t >= n:
             continue
         wps[t] += 1
-        if LAUGH.match(w["w"].strip()): laugh[t] += 1
-        if SWEAR.search(w["w"]): swear[t] += 1
+        xr = _xreact(w["w"], lang)  # other languages' reaction words (only when that language was heard for sure)
+        if LAUGH.match(w["w"].strip()) or xr == "laugh": laugh[t] += 1
+        if SWEAR.search(w["w"]) or xr == "swear": swear[t] += 1
         if NOVEL.search(w["w"]): novel[t] += 1
     laugh, swear, novel = np.clip(smooth(laugh, 4) * 2, 0, 3), np.clip(smooth(swear, 4) * 3, 0, 2), np.clip(smooth(novel, 5) * 3, 0, 2)  # sparse events: raw strength, not z-scores
     try:  # laughing (and rapid excited bursts) heard in the sound, since the transcript rarely writes "haha": a light extra, never decisive on its own

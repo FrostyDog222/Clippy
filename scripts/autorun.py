@@ -353,6 +353,15 @@ def queue_for_review(clip):
     return stem
 
 
+def _nonen(job):
+    """1 when the speech of this source is a language other than English (heard with 80%+), else 0: lets the learning see whether such clips please you."""
+    try:
+        i = json.loads((pathlib.Path(job) / "lang.json").read_text(encoding="utf-8"))
+        return 1 if (i.get("language") != "en" and float(i.get("p") or 0) >= 0.8) else 0
+    except Exception:
+        return 0
+
+
 def _noai(c, q, hook, seam, scene):
     """No-AI titles: a real quote stays the on-video title; otherwise a clean line for the recognised event (plane, crash, police...)."""
     n = textutil.noai_titles(f"{c.get('text', '')} {scene or ''}", CHAT_HINT)
@@ -526,7 +535,7 @@ def _stage2(v, job, st):
         log("  penalties: " + "; ".join(f"-{p:g} {w}" for p, w in pen) + f" -> rank {rank:.1f}")
     dur_ = max(1.0, float(c.get("end", 0)) - float(c.get("start", 0)))
     feat = {"win": win_score, "frames": res_score, "ai": c.get("ai"), "score": score, "penalty": round(sum(p for p, _ in pen), 2), "sig": c.get("sig"), "why": c.get("why"),
-            "seconds": round(dur_, 1), "twitch": 1 if v.get("twitch") else 0, "live": 1 if ORIGIN == "live" else 0, "views_log": round(__import__("math").log10((v.get("views") or 0) + 1), 2),
+            "seconds": round(dur_, 1), "twitch": 1 if v.get("twitch") else 0, "live": 1 if ORIGIN == "live" else 0, "nonen": _nonen(job), "views_log": round(__import__("math").log10((v.get("views") or 0) + 1), 2),
             "wps": round(len(str(c.get("text") or "").split()) / dur_, 2), "channel": v.get("channel"), "source_captions": caps_share,  # more for the learning: length, source, popularity, speech speed, which streamer
             "notes": [f"-{p:g} {w}" for p, w in pen] + [f"+{p:g} {w}" for p, w in bonus_notes], "bit": (win or {}).get("why"), "scene": scene}  # notes/bit/scene: shown in the dashboard score tooltip
     try:  # after enough 👍/👎 ratings: a small nudge (at most +-1) toward moments that look like the ones the user liked (scripts/learn.py)

@@ -140,3 +140,40 @@ def upper(text, lang=None):
     if (lang or "").lower() == "tr":
         text = text.replace("i", "İ").replace("ı", "I")
     return text.upper()
+
+
+# Reaction words per language (shock/hype, laughter, mild swearing). Used ONLY for clips whose language was heard with TRUST confidence and is not English; English keeps its own lists.
+LEX = {
+    "es": ("no puede ser|dios mio|madre mia|joder|increible|vamos|que locura|no me lo creo|de locos", "jaja|jeje|jajaja|jajajaja", "joder|mierda|cabron|coño|puta|hostia"),
+    "pt": ("meu deus|nossa|caramba|que isso|inacreditavel|vamos|não acredito|não pode ser", "kkk|kkkk|rsrs|haha|hahaha", "porra|caralho|merda|puta|foda"),
+    "fr": ("oh mon dieu|putain|incroyable|c'est fou|allez|non mais|sérieux|t'es sérieux", "mdr|ptdr|haha|hahaha", "putain|merde|bordel|con|chier"),
+    "de": ("oh mein gott|krass|alter|wahnsinn|unglaublich|echt jetzt|digga|nee|geil", "haha|hahaha|ahaha", "scheiße|scheisse|verdammt|arsch|fick|kacke"),
+    "it": ("mamma mia|oddio|incredibile|che roba|dai|non ci credo|assurdo|madonna", "haha|ahah|ahahah", "cazzo|merda|porca|stronzo|vaffanculo"),
+    "ru": ("боже мой|ничего себе|офигеть|капец|нифига|не может быть|вау|ого|жесть|пиздец", "хаха|ахаха|хах|ха-ха", "блин|блять|бля|сука|хрен|черт"),
+    "tr": ("yok artık|inanılmaz|ya|aman allahım|vay be|olamaz|çıldırdım|bu ne", "hahaha|haha|ahaha", "lan|siktir|amına|orospu|bok"),
+    "ar": ("يا الله|ما هذا|لا يمكن|مستحيل|والله|يا رجل|ياساتر|كيف", "هههه|ههه|هاها", "تبا|اللعنة|زفت"),
+    "ja": ("やばい|すごい|まじ|うそ|嘘でしょ|えっ|ええ|信じられない", "w+|笑|ははは|あはは", "くそ|クソ|ちくしょう"),
+    "ko": ("대박|와|헐|진짜|말도 안 돼|미쳤다|우와|어머", "ㅋㅋ+|ㅎㅎ+|하하", "씨발|젠장|개새|좆"),
+    "ro": ("nu se poate|doamne|incredibil|haide|ce naiba|pe bune|mama mia|nebunie", "haha|hahaha|ahaha|hihi", "dracu|naiba|pula|fut|căcat|rahat"),
+    "pl": ("o boże|niemożliwe|nie wierzę|szok|ale jazda|no nie|co jest", "haha|hahaha|xd", "kurwa|cholera|do cholery|szlag|dupa"),
+    "nl": ("oh mijn god|ongelooflijk|echt waar|wauw|gekkenhuis|serieus", "haha|hahaha|lol", "kut|shit|verdomme|godver|klote"),
+    "hi": ("हे भगवान|अरे यार|क्या बात|पागल|वाह|ये क्या|यार", "हाहा|हा हा|हाहाहा", "साला|कमीना|बकवास"),
+    "id": ("astaga|gila|serius|wah|ya ampun|mantap|nggak mungkin", "wkwk|wkwkwk|haha|hahaha", "anjing|sialan|bangsat|tai"),
+}
+_LEXRE = {}
+
+
+def _compile(lang):
+    if lang not in _LEXRE:
+        h, l, s = LEX[lang]
+        _LEXRE[lang] = tuple(re.compile(r"(?:^|\W)(?:%s)(?:\W|$)" % p, re.I) for p in (h, l, s))
+    return _LEXRE[lang]
+
+
+def reaction(text, info):
+    """-> ("hype"|"laugh"|"swear"|None). Only for a trusted, non-English language that has a list; English words are handled by the normal lists."""
+    lang = str((info or {}).get("language") or "").lower()
+    if lang == "en" or not trusted(info) or lang not in LEX:
+        return None
+    h, l, s = _compile(lang)
+    return "laugh" if l.search(text) else "swear" if s.search(text) else "hype" if h.search(text) else None

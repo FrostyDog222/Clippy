@@ -710,7 +710,7 @@ def review_edit(stem, title, desc, tags, tiktok=""):
     mf.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-WHY = ("boring", "nudity", "crop", "repeat", "other")  # why a clip was a 👎
+WHY = ("boring", "notfunny", "noaction", "slow", "nocontext", "offtopic", "nudity", "crop", "cutoff", "audio", "captions", "title", "language", "repeat", "other")  # why a clip was a 👎
 
 
 def review_remove(stem):
@@ -865,7 +865,7 @@ def review_items():
             et, ed, eg = split_meta(meta)
             out.append({"id": f.stem, "title": meta.get("yt_title", ""), "desc": meta.get("yt_description", ""), "caption": meta.get("tiktok_caption", ""),
                         "edit_title": et, "edit_desc": ed, "edit_tags": " ".join(eg), "edit_tiktok": meta.get("tiktok_custom", ""), "edited": bool(meta.get("edited")),
-                        "seconds": d.get("seconds"), "layout": d.get("layout"), "captions_off": d.get("captions_off"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "reviewed": bool(d.get("reviewed") or d.get("rating") in (1, -1)), "reason": d.get("reason"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
+                        "seconds": d.get("seconds"), "layout": d.get("layout"), "captions_off": d.get("captions_off"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "reviewed": bool(d.get("reviewed") or d.get("rating") in (1, -1)), "reason": d.get("reason"), "reasons": d.get("reasons"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
                         "posted": json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {}, "status": REVIEW_STATUS.get(f.stem)})
         except Exception:
             continue
@@ -1433,8 +1433,12 @@ class H(http.server.BaseHTTPRequestHandler):
                 cf = REVIEW / (stem + ".json"); d = json.loads(cf.read_text(encoding="utf-8")); d["rating"] = body["rating"]
                 d["reviewed"] = bool(body["rating"] in (1, -1) or body.get("neutral"))  # 👍 / 😐 / 👎 = "I looked at it": it no longer counts as waiting for you
                 d.pop("reason", None)
-                if body["rating"] == -1 and body.get("reason") in WHY:
-                    d["reason"] = body["reason"]
+                d.pop("reasons", None)
+                if body["rating"] == -1:
+                    rs = body.get("reasons") if isinstance(body.get("reasons"), list) else ([body["reason"]] if body.get("reason") else [])
+                    rs = [str(x).strip()[:40] for x in rs if isinstance(x, (str,)) and str(x).strip()][:8]  # known reasons, or the user's own words
+                    if rs:
+                        d["reasons"] = rs; d["reason"] = next((x for x in rs if x in WHY), rs[0])
                 cf.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
                 log_rating(stem, d, body["rating"]); learn_refit()
             except Exception:
