@@ -626,11 +626,75 @@ def review_items():
             et, ed, eg = split_meta(meta)
             out.append({"id": f.stem, "title": meta.get("yt_title", ""), "desc": meta.get("yt_description", ""), "caption": meta.get("tiktok_caption", ""),
                         "edit_title": et, "edit_desc": ed, "edit_tags": " ".join(eg), "edit_tiktok": meta.get("tiktok_custom", ""), "edited": bool(meta.get("edited")),
-                        "seconds": d.get("seconds"), "layout": d.get("layout"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
+                        "seconds": d.get("seconds"), "layout": d.get("layout"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
                         "posted": json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {}, "status": REVIEW_STATUS.get(f.stem)})
         except Exception:
             continue
     return out
+
+
+def _ffbin(name):
+    import shutil
+    p = shutil.which(name)
+    if not p:
+        raise RuntimeError(f"{name} was not found")
+    return p
+
+
+def _duration(f):
+    r = subprocess.run([_ffbin("ffprobe"), "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(f)], capture_output=True, text=True, creationflags=NOWIN, timeout=60)
+    return float(r.stdout.strip())
+
+
+def _replace(src, dst, tries=8):
+    """os.replace that waits for a video the page may still be playing (Windows locks it for a moment)."""
+    for _ in range(tries):
+        try:
+            os.replace(src, dst); return
+        except PermissionError:
+            time.sleep(0.5)
+    raise RuntimeError("the video is in use: pause it and try again")
+
+
+def review_trim(stem, start, end, fade=True):
+    """Cut a finished clip to [start, end] seconds of its ORIGINAL (kept beside it as <stem>.orig, so a second trim or Reset starts from the full clip). The clip's captions are
+    burned in, so they stay in sync. The result replaces <stem>.mp4: that is the file Post uploads (with the saved title / description / hashtags)."""
+    mp4, orig, cj = REVIEW / (stem + ".mp4"), REVIEW / (stem + ".orig"), REVIEW / (stem + ".json")
+    if not mp4.exists() or not cj.exists():
+        raise ValueError("clip not found")
+    if not orig.exists():
+        import shutil
+        shutil.copy2(mp4, orig)
+    dur = _duration(orig)
+    start, end = float(start), float(end)
+    if not (0 <= start < end <= dur + 0.05) or end - start < 1.0:
+        raise ValueError(f"choose a start and end inside the clip (it is {dur:.1f} s long, at least 1 s must remain)")
+    end = min(end, dur); n = end - start
+    tmp = REVIEW / (stem + ".trim.tmp")
+    vf = ["-vf", f"fade=t=out:st={max(0.0, n - 0.3):.2f}:d=0.3", "-af", f"afade=t=out:st={max(0.0, n - 0.35):.2f}:d=0.35"] if fade and n > 2 else []
+    cmd = [_ffbin("ffmpeg"), "-y", "-v", "error", "-ss", f"{start:.2f}", "-to", f"{end:.2f}", "-i", str(orig), *vf, "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+           "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", "-f", "mp4", str(tmp)]
+    r = subprocess.run(cmd, capture_output=True, text=True, creationflags=NOWIN, timeout=300)
+    if r.returncode != 0 or not tmp.exists() or tmp.stat().st_size < 1000:
+        tmp.unlink(missing_ok=True); raise RuntimeError("cutting failed: " + (r.stderr or "")[-150:])
+    _replace(tmp, mp4)
+    d = json.loads(cj.read_text(encoding="utf-8"))
+    d.setdefault("orig_seconds", d.get("seconds"))
+    d["seconds"] = round(n, 1); d["trim"] = {"start": round(start, 2), "end": round(end, 2), "fade": bool(fade)}
+    cj.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+    return {"seconds": d["seconds"]}
+
+
+def review_trim_reset(stem):
+    mp4, orig, cj = REVIEW / (stem + ".mp4"), REVIEW / (stem + ".orig"), REVIEW / (stem + ".json")
+    if not orig.exists():
+        return
+    _replace(orig, mp4)
+    d = json.loads(cj.read_text(encoding="utf-8"))
+    if d.get("orig_seconds") is not None:
+        d["seconds"] = d["orig_seconds"]
+    d.pop("trim", None); d.pop("orig_seconds", None)
+    cj.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def review_post(stem, mode="private"):
@@ -680,8 +744,8 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_response(code); self.send_header("Content-Type", ctype + "; charset=utf-8")
         self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
 
-    def serve_review(self, stem):
-        f = REVIEW / (stem + ".mp4")
+    def serve_review(self, stem, orig=False):
+        f = REVIEW / (stem + ".orig") if orig and (REVIEW / (stem + ".orig")).exists() else REVIEW / (stem + ".mp4")  # the untrimmed original for the trim preview (the clip itself when it was never trimmed)
         if not f.exists():
             return self.send(404, "no", "text/plain")
         size = f.stat().st_size; a, b, code = 0, size - 1, 200
@@ -709,9 +773,9 @@ class H(http.server.BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
-        m = re.match(r"^/review/(\d+__clip_[A-Za-z0-9_-]+)\.mp4$", self.path.split("?")[0])
+        m = re.match(r"^/review/(\d+__clip_[A-Za-z0-9_-]+)\.(mp4|orig)$", self.path.split("?")[0])
         if m and self.headers.get("Host", "").split(":")[0] in ("127.0.0.1", "localhost"):
-            return self.serve_review(m.group(1))
+            return self.serve_review(m.group(1), m.group(2) == "orig")
         if self.path == "/api/state":
             c, posts = read_cfg(), read_posts()
             today = dt.date.today().isoformat()
@@ -838,6 +902,22 @@ class H(http.server.BaseHTTPRequestHandler):
                 review_edit(stem, body.get("title", ""), body.get("description", ""), str(body.get("hashtags", "")).split(), body.get("tiktok", ""))
             except ValueError as e:
                 return self.send(400, str(e), "text/plain")
+        elif self.path in ("/api/review/trim", "/api/review/trim/reset"):  # cut a few seconds off a finished clip (or go back to the full clip)
+            try:
+                body = json.loads(self.rfile.read(n)); stem = body["id"]; assert STEM.match(stem)
+            except Exception:
+                return self.send(400, "bad id", "text/plain")
+            if (REVIEW_STATUS.get(stem) or {}).get("state") == "posting":
+                return self.send(409, "This clip is being posted right now: wait until it is done", "text/plain")
+            try:
+                if self.path.endswith("reset"):
+                    review_trim_reset(stem)
+                else:
+                    review_trim(stem, body["start"], body["end"], bool(body.get("fade", True)))
+            except (ValueError, KeyError, TypeError) as e:
+                return self.send(400, str(e) or "bad values", "text/plain")
+            except Exception as e:
+                return self.send(500, str(e)[:200], "text/plain")
         elif self.path == "/api/review/rate":  # thumbs up / down on a clip: kept with the signals behind it (ratings.jsonl, local only) to learn what works
             try:
                 body = json.loads(self.rfile.read(n)); stem = body["id"]; assert STEM.match(stem) and body["rating"] in (-1, 0, 1)

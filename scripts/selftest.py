@@ -224,6 +224,53 @@ def test_dashboard_script_syntax():
     assert r.returncode == 0, r.stderr[-300:]
 
 
+def test_trim_then_post_uses_the_new_video_and_texts():
+    import http.server, json, shutil, sys, tempfile, threading, urllib.request
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        return
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    tmp = Path(tempfile.mkdtemp()); (tmp / "review").mkdir()
+    keep = (d.R, d.REVIEW, d.subprocess.run, d.read_cfg); d.R, d.REVIEW = tmp, tmp / "review"
+    stem = "1795999777__clip_1"
+    d.subprocess.run([shutil.which("ffmpeg"), "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=270x480:rate=30:duration=8", "-f", "lavfi", "-i", "sine=frequency=440:duration=8",
+                      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(d.REVIEW / f"{stem}.mp4")], check=True, capture_output=True)
+    (d.REVIEW / f"{stem}.json").write_text(json.dumps({"seconds": 8.0, "layout": "facecam"}))
+    (d.REVIEW / f"{stem.replace('clip_', 'meta_')}.json").write_text(json.dumps({"yt_title": "My edited title #Shorts", "yt_description": "my words", "edited": True}))
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 8796), d.H); threading.Thread(target=srv.serve_forever, daemon=True).start()
+    def api(path, body):
+        rq = urllib.request.Request("http://127.0.0.1:8796" + path, data=json.dumps(body).encode(), method="POST", headers={"Content-Type": "application/json"})
+        try:
+            return urllib.request.urlopen(rq).status
+        except urllib.error.HTTPError as e:
+            return e.code
+    try:
+        mp4 = d.REVIEW / f"{stem}.mp4"
+        assert api("/api/review/trim", {"id": stem, "start": 1, "end": 5}) == 200
+        assert abs(d._duration(mp4) - 4.0) < 0.2 and abs(d._duration(d.REVIEW / f"{stem}.orig") - 8.0) < 0.2  # trimmed; the original is kept
+        assert api("/api/review/trim", {"id": stem, "start": 0, "end": 6, "fade": False}) == 200 and abs(d._duration(mp4) - 6.0) < 0.2  # a second trim starts from the ORIGINAL
+        assert api("/api/review/trim", {"id": stem, "start": 7.5, "end": 8}) == 400 and api("/api/review/trim", {"id": stem, "start": 5, "end": 2}) == 400  # under 1 s / backwards
+        assert api("/api/review/trim", {"id": "../x", "start": 0, "end": 2}) == 400
+        assert api("/api/review/trim", {"id": stem, "start": 2, "end": 7}) == 200
+        info = json.loads((d.REVIEW / f"{stem}.json").read_text()); assert info["seconds"] == 5.0 and info["trim"]["start"] == 2.0 and info["orig_seconds"] == 8.0
+        # Post: the file handed to the uploader is the trimmed one, next to the edited texts
+        seen = {}
+        class R_: returncode = 0; stdout = json.dumps({"youtube": "http://y"}); stderr = ""
+        def fake(cmd, **kw):
+            if any("post_clip.py" in str(c) for c in cmd):
+                seen["file"] = Path(cmd[2]); seen["dur"] = d._duration(cmd[2]); seen["meta"] = json.loads((d.REVIEW / f"{stem.replace('clip_', 'meta_')}.json").read_text())
+                return R_()
+            return keep[2](cmd, **kw)
+        d.subprocess.run = fake; d.read_cfg = lambda: {"post_youtube": True, "post_tiktok": False}
+        d.review_post(stem, "private")
+        assert seen["file"].name == f"{stem}.mp4" and abs(seen["dur"] - 5.0) < 0.2 and seen["meta"]["yt_title"] == "My edited title #Shorts", seen
+        d.subprocess.run = keep[2]
+        assert api("/api/review/trim/reset", {"id": stem}) == 200 and abs(d._duration(mp4) - 8.0) < 0.2 and not (d.REVIEW / f"{stem}.orig").exists()
+        assert "trim" not in json.loads((d.REVIEW / f"{stem}.json").read_text())
+    finally:
+        srv.shutdown(); d.R, d.REVIEW, d.subprocess.run, d.read_cfg = keep
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""
