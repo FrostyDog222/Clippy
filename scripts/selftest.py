@@ -64,7 +64,6 @@ def test_webcam_panel_crop():
 
 def test_streamer_twitch_clips_filter():
     import twitch
-    autorun.TP = dict(autorun.TP, any=False, gta=True, name="GTA 6")
     rows = [{"id": "tw:a", "title": "good", "channel": "X", "duration": 30, "views": 5000, "game": "Grand Theft Auto VI"},
             {"id": "tw:b", "title": "other game", "channel": "X", "duration": 30, "views": 9000, "game": "Trees Hate You"},
             {"id": "tw:c", "title": "old gta", "channel": "X", "duration": 30, "views": 9000, "game": "Grand Theft Auto V"},
@@ -72,8 +71,13 @@ def test_streamer_twitch_clips_filter():
             {"id": "tw:e", "title": "tiny", "channel": "X", "duration": 30, "views": 20, "game": "Grand Theft Auto VI"},
             {"id": "tw:f", "title": "used", "channel": "X", "duration": 30, "views": 8000, "game": "Grand Theft Auto VI"}]
     twitch.channel_clips = lambda *a, **k: rows
+    import topic
+    autorun.TP = topic.info({"topic": "GTA 6"})
     got = autorun.creator_twitch_clips("X", {"tw:f"})
     assert [c["id"] for c in got] == ["tw:a"] and got[0]["twitch"], got
+    autorun.TP = topic.info({"topic": ""})  # no topic: every game is fine (this was the bug: the name 'gaming' had to appear in the game name)
+    got = autorun.creator_twitch_clips("X", {"tw:f"})
+    assert [c["id"] for c in got] == ["tw:a", "tw:b", "tw:c"], got
 
 
 def test_judge_rules():

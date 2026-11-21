@@ -176,10 +176,9 @@ def creator_twitch_clips(creator, skip_ids, top=3):
     on the topic when one is set, most viewed first."""
     import twitch
     def on_topic(game):
-        g = (game or "").lower()
-        if TP["any"] or not g:
+        if TP["any"] or not (game or "").strip():
             return True
-        return ("grand theft auto vi" in g or "gta vi" in g) if TP["gta"] else TP["name"].lower() in g
+        return bool(TP["matches"](game))  # the same topic rule as everywhere else: an empty topic accepts every game, GTA accepts "Grand Theft Auto VI" (not V)
     out = []
     for c in twitch.channel_clips(creator, 15):
         if c["id"] in skip_ids or BANNED.search(c["title"]) or not (15 <= c["duration"] <= 60) or c["views"] < 100 or not on_topic(c.get("game")):
