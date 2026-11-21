@@ -52,6 +52,8 @@ def allowed_suffixes():
     # one-time model downloads happen only from setup.bat, which sets these after asking you (they are never on during normal runs)
     if os.environ.get("CLIPPY_ALLOW_HF"):
         out += ("huggingface.co", "hf.co")
+    if os.environ.get("CLIPPY_ALLOW_UPDATE"):  # only scripts/update_clippy.py: the public Clippy repo (version check + code download)
+        out += ("api.github.com", "codeload.github.com")
     if os.environ.get("CLIPPY_ALLOW_GITHUB"):
         out += ("github.com", "raw.githubusercontent.com", "media.githubusercontent.com", "objects.githubusercontent.com")
     return tuple(out)

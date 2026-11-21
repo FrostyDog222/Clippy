@@ -13,7 +13,7 @@ FILES = ["dashboard.py", "dashboard.html", "dashboard.bat", "setup.bat", "tick.p
          "scripts/ai_check.py", "scripts/ai_title.py", "scripts/api_upload.py", "scripts/autorun.py", "scripts/check.py", "scripts/cleanup.py", "scripts/common.py",
          "scripts/cut.py", "scripts/facecam.py", "scripts/friendly.py", "scripts/init_config.py", "scripts/live.py", "scripts/live_watch.py", "scripts/make_meta.py", "scripts/make_release.py",
          "scripts/moments.py", "scripts/netguard.py", "scripts/post_clip.py", "scripts/progress.py", "scripts/secretstore.py", "scripts/security_audit.py",
-         "scripts/sitecustomize_clippy.py", "scripts/stats.py", "scripts/streams.py", "scripts/textutil.py", "scripts/topic.py", "scripts/twitch.py", "scripts/update_ytdlp.py",
+         "scripts/sitecustomize_clippy.py", "scripts/stats.py", "scripts/streams.py", "scripts/textutil.py", "scripts/topic.py", "scripts/twitch.py", "scripts/update_clippy.py", "scripts/update_ytdlp.py",
          "scripts/upload.py", "scripts/visual_check.py"]
 FACE = pathlib.Path.home() / "AppData" / "Local" / "gtavi-claudecode" / "models" / "face_detection_yunet_2023mar.onnx"
 # words that must never reach a release (your user name, channel name...): read from .release_scrub.txt in the project, a local file that is never packaged;

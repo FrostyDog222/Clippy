@@ -96,7 +96,7 @@ input[type=checkbox]{accent-color:#8d54ff;width:16px;height:16px;vertical-align:
 table{width:100%;border-collapse:collapse}td,th{padding:10px 8px;text-align:left;border-bottom:1px solid rgba(145,112,255,.14);font-size:13.5px}th{color:var(--mut);font-weight:600;font-size:12.5px;letter-spacing:.03em}tr:last-child td{border-bottom:0}a{color:#b69cff}a:hover{color:#d3c3ff}
 .chk div{padding:5px 0}.ok{color:var(--acc)}.no{color:var(--bad)}
 details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:pre-wrap;color:#cfc8f5;font:12.5px/1.55 ui-monospace,Consolas,monospace;margin:10px 0 0;max-height:260px;overflow:auto}
-.setgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;align-items:start}.setgrid .wide{grid-column:1/-1}
+.setgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;align-items:start}.setcol{display:flex;flex-direction:column;gap:20px;min-width:0}
 .aboutcard{display:flex;gap:28px;align-items:center;flex-wrap:wrap}.aboutcard .mimg{width:230px;height:230px}.aboutcard .txt{flex:1;min-width:260px}
 .aboutcard p{margin:0 0 10px;color:var(--mut);font-size:15px}.aboutcard ul,.safe ul{margin:8px 0 0;padding-left:20px;color:var(--mut);line-height:1.8}
 .save{position:fixed;left:calc(50% + 136px);bottom:22px;transform:translate(-50%,140px);background:rgba(28,18,62,.96);border:1px solid #9a78ff;border-radius:99px;padding:11px 14px 11px 24px;display:flex;align-items:center;gap:14px;box-shadow:0 14px 40px rgba(0,0,0,.6),0 0 0 4px rgba(124,77,255,.15);transition:.25s;z-index:5}.save.show{transform:translate(-50%,0)}
@@ -179,6 +179,20 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:p
 </section>
 <section class="tab" data-tab="settings" hidden>
   <div class="setgrid">
+    <div class="setcol">
+    <div class="card"><h2>What to look for</h2>
+    <label class="f"><span>Topic (a game or anything, e.g. GTA 6, Minecraft, Elden Ring)</span><input type="text" id="topic" maxlength="60" placeholder="GTA 6"></label>
+    <div class="sw"><div><div>Search what is trending right now</div><small style="color:var(--mut)">No topic needed: the bot looks at what is popular on YouTube at the moment and clips that. With this ON the topic field is ignored for the trending search.</small></div><button class="tg" id="ta" onclick="setTA()"></button></div>
+  </div>
+    <div class="card"><h2>Streamers</h2>
+    <label class="f"><span>How to choose</span><div class="seg" id="mode">
+      <button data-v="rotate">Rotate</button><button data-v="random">Random</button><button data-v="fixed">List only</button></div>
+      <small id="modenote"></small></label>
+    <div class="chips" id="chips"></div>
+    <input type="text" id="addc" placeholder="Add a streamer and press Enter" onkeydown="if(event.key==='Enter'||event.key===','){event.preventDefault();addC(this.value);this.value=''}" onpaste="setTimeout(()=>{addC(this.value);this.value=''})">
+    <label class="f" style="margin-top:14px"><span>Max clips per streamer per day</span><input type="number" id="max_per_creator_per_day" min="1"></label>
+    <div class="sw"><div><div>Use trending videos as a backup</div><small style="color:var(--mut)">When your streamers have nothing new, the bot picks what is popular for your topic right now. With an empty list it uses trending only. If the list is empty and this is OFF, the bot cannot be turned on.</small></div><button class="tg" id="tf" onclick="setTF()"></button></div>
+  </div>
     <div class="card"><h2>Schedule</h2>
     <div class="r2">
       <label class="f"><span>Posts per day (at most)</span><input type="number" id="posts_per_day" min="0" max="24"><small>A ceiling, not a target: if only 5 good moments turn up, it posts 5.</small></label>
@@ -195,25 +209,30 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:p
     </div>
     <div class="hint" style="margin:-4px 0 0">Default is 0 = public from the start. To try it out first, enter a number of days: posts are Private (YouTube) and "Only me" (TikTok) for that long from the start date, then go public automatically.</div>
   </div>
+    <div class="card"><h2>Live chat watching</h2>
+  <div class="sw"><div><div>Live mode: watch live streams only</div><small style="color:var(--mut)"><b>ON = live streams only. OFF = videos and VODs only (the two never mix).</b> ON: the bot records several live streams on your topic (YouTube and Twitch) at once and reads their chat. When chat explodes (WTF, OMG, no way...) it cuts that moment, makes the Short and posts it, using the same daily limit, time window and gap as everything else. Streamers from your list are watched first. Uses bandwidth and some disk while it records.</small></div><button class="tg" id="lw" title="Turn live watching on or off" onclick="post('/api/live')"></button></div>
+  <label class="f" style="margin-top:10px"><span>How many streams to watch at once</span><input type="number" id="live_max_streams" min="1" max="5"><small>1 to 5. Each one records video and reads chat all day.</small></label>
+  <div id="livebox" class="hint" style="margin-top:6px;line-height:1.7"></div>
+</div>
+    <div class="card"><h2>Storage</h2>
+  <div>Temporary videos on disk: <b id="jmb">-</b></div>
+  <div class="sw" style="margin-top:6px"><div><div>Delete source videos once their clips are cut</div><small style="color:var(--mut)">Frees hundreds of MB per run. Finished clips are kept for the days below.</small></div><button class="tg" id="cs" onclick="setCS()"></button></div>
+  <label class="f" style="margin-top:6px"><span>Keep finished clips for</span><div class="unit"><input type="number" id="keep_clips_days" min="0"><em>days</em></div></label>
+  <div class="btns"><button class="btn" onclick="post('/api/cleanup')">Clean up now</button></div>
+</div>
+    <div class="card"><h2>Quality check</h2>
+  <div class="sw"><div><div>&#10003; Prioritize quality over quantity</div><small style="color:var(--mut)">ON (recommended, default): only clearly strong moments are posted, and when none qualify the slot is skipped instead of posting an average clip, so you may post fewer than the daily maximum. OFF: decent moments are accepted too and the AI check is optional.</small></div><button class="tg" id="qt" title="Quality over quantity" onclick="setQT()"></button></div>
+  <input type="hidden" id="quality">
+  <div class="sw"><div><div>AI frame check before posting</div><small style="color:var(--mut)">ON: before a clip is cut, an AI looks at 3 frames of the moment and skips it unless it is clearly about your topic with something happening (not talking, a menu or a quiet scene). Whenever an AI writes the titles it also gets a one-line description of what is on screen, so titles match the real event, even with this switch off. Uses the same AI as the titles: Claude (signed in) or your own API key with a model that accepts images. Only 3 small frames of the clip are sent. If the AI cannot be reached the moment is used without this check.</small></div><button class="tg" id="ac" onclick="setAC()"></button></div>
+</div>
+    </div>
+    <div class="setcol">
     <div class="card"><h2>Where to post</h2>
     <div class="sw"><div><div>Auto post: <b id="apstate">OFF</b></div><small style="color:var(--mut)">ON: Clippy posts every finished clip by itself. OFF: finished clips wait in "Ready to post" at the top, and nothing goes out until you press Post.</small></div><button class="tg" id="aup" onclick="setAuto()"></button></div>
     <div class="sw"><div><div>YouTube Shorts</div><small style="color:var(--mut)">Post the clips to your YouTube channel.</small></div><button class="tg" id="pyt" onclick="setPost('post_youtube','pyt')"></button></div>
     <div class="sw"><div><div>TikTok</div><small style="color:var(--mut)">Post the clips to your TikTok account.</small></div><button class="tg" id="ptt" onclick="setPost('post_tiktok','ptt')"></button></div>
   </div>
-    <div class="card"><h2>What to look for</h2>
-    <label class="f"><span>Topic (a game or anything, e.g. GTA 6, Minecraft, Elden Ring)</span><input type="text" id="topic" maxlength="60" placeholder="GTA 6"></label>
-    <div class="sw"><div><div>Search what is trending right now</div><small style="color:var(--mut)">No topic needed: the bot looks at what is popular on YouTube at the moment and clips that. With this ON the topic field is ignored for the trending search.</small></div><button class="tg" id="ta" onclick="setTA()"></button></div>
-  </div>
-    <div class="card"><h2>Streamers</h2>
-    <label class="f"><span>How to choose</span><div class="seg" id="mode">
-      <button data-v="rotate">Rotate</button><button data-v="random">Random</button><button data-v="fixed">List only</button></div>
-      <small id="modenote"></small></label>
-    <div class="chips" id="chips"></div>
-    <input type="text" id="addc" placeholder="Add a streamer and press Enter" onkeydown="if(event.key==='Enter'||event.key===','){event.preventDefault();addC(this.value);this.value=''}" onpaste="setTimeout(()=>{addC(this.value);this.value=''})">
-    <label class="f" style="margin-top:14px"><span>Max clips per streamer per day</span><input type="number" id="max_per_creator_per_day" min="1"></label>
-    <div class="sw"><div><div>Use trending videos as a backup</div><small style="color:var(--mut)">When your streamers have nothing new, the bot picks what is popular for your topic right now. With an empty list it uses trending only. If the list is empty and this is OFF, the bot cannot be turned on.</small></div><button class="tg" id="tf" onclick="setTF()"></button></div>
-  </div>
-    <div class="wide"><div class="card"><h2>Video</h2>
+    <div class="card"><h2>Video</h2>
   <div class="r2">
     <label class="f"><span>Short length (longest clip)</span><div class="unit"><input type="number" id="clip_seconds" min="10" max="60"><em>sec</em></div><small>10 to 60. Shorter clips cut closer to the peak. Moments are picked to fit.</small></label>
     <label class="f"><span>Layout</span><select id="layout" style="width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font:inherit">
@@ -242,11 +261,6 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:p
       <div class="btns"><button class="btn pri" type="button" onclick="testAI()">Test this model</button></div><div id="aitest" class="hint"></div>
     </div>
   </div>
-</div></div>
-    <div class="card"><h2>Quality check</h2>
-  <div class="sw"><div><div>&#10003; Prioritize quality over quantity</div><small style="color:var(--mut)">ON (recommended, default): only clearly strong moments are posted, and when none qualify the slot is skipped instead of posting an average clip, so you may post fewer than the daily maximum. OFF: decent moments are accepted too and the AI check is optional.</small></div><button class="tg" id="qt" title="Quality over quantity" onclick="setQT()"></button></div>
-  <input type="hidden" id="quality">
-  <div class="sw"><div><div>AI frame check before posting</div><small style="color:var(--mut)">ON: before a clip is cut, an AI looks at 3 frames of the moment and skips it unless it is clearly about your topic with something happening (not talking, a menu or a quiet scene). Whenever an AI writes the titles it also gets a one-line description of what is on screen, so titles match the real event, even with this switch off. Uses the same AI as the titles: Claude (signed in) or your own API key with a model that accepts images. Only 3 small frames of the clip are sent. If the AI cannot be reached the moment is used without this check.</small></div><button class="tg" id="ac" onclick="setAC()"></button></div>
 </div>
     <div class="card"><h2>Upload method</h2>
   <label class="f"><span>How clips get uploaded</span><select id="uploader" style="width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font:inherit">
@@ -255,17 +269,6 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:p
     <option value="api">Official APIs (needs developer approval)</option></select></label>
   <div id="upw" class="hint" style="margin:0;line-height:1.6"></div>
   <div class="sw" style="margin-top:10px"><div><div>Stop autopilot after a strike or warning</div><small style="color:var(--mut)">ON: pauses if YouTube or TikTok shows a strike or account warning. OFF: keeps posting. Copyright claims never stop it. Dealing with strikes is up to you.</small></div><button class="tg" id="ss" onclick="setSS()"></button></div>
-</div>
-    <div class="card"><h2>Live chat watching</h2>
-  <div class="sw"><div><div>Live mode: watch live streams only</div><small style="color:var(--mut)"><b>ON = live streams only. OFF = videos and VODs only (the two never mix).</b> ON: the bot records several live streams on your topic (YouTube and Twitch) at once and reads their chat. When chat explodes (WTF, OMG, no way...) it cuts that moment, makes the Short and posts it, using the same daily limit, time window and gap as everything else. Streamers from your list are watched first. Uses bandwidth and some disk while it records.</small></div><button class="tg" id="lw" title="Turn live watching on or off" onclick="post('/api/live')"></button></div>
-  <label class="f" style="margin-top:10px"><span>How many streams to watch at once</span><input type="number" id="live_max_streams" min="1" max="5"><small>1 to 5. Each one records video and reads chat all day.</small></label>
-  <div id="livebox" class="hint" style="margin-top:6px;line-height:1.7"></div>
-</div>
-    <div class="card"><h2>Storage</h2>
-  <div>Temporary videos on disk: <b id="jmb">-</b></div>
-  <div class="sw" style="margin-top:6px"><div><div>Delete source videos once their clips are cut</div><small style="color:var(--mut)">Frees hundreds of MB per run. Finished clips are kept for the days below.</small></div><button class="tg" id="cs" onclick="setCS()"></button></div>
-  <label class="f" style="margin-top:6px"><span>Keep finished clips for</span><div class="unit"><input type="number" id="keep_clips_days" min="0"><em>days</em></div></label>
-  <div class="btns"><button class="btn" onclick="post('/api/cleanup')">Clean up now</button></div>
 </div>
     <div class="card"><h2>Accounts</h2>
   <div class="sw"><div>YouTube</div><span class="pill"><span class="dot" id="yd"></span><span id="yt">Not checked</span></span></div>
@@ -277,12 +280,18 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:p
     <div class="card"><h2>You</h2>
     <label class="f"><span>Your name (shown in the welcome line; leave empty to hide it)</span><input type="text" id="display_name" maxlength="40" placeholder="Your name"></label>
   </div>
+    </div>
   </div>
 </section>
 <section class="tab stack" data-tab="about" hidden>
   <div class="card aboutcard"><div class="mimg" role="img" aria-label="Clippy"></div><div class="txt"><h2 style="margin-bottom:10px">About Clippy</h2>
     <p>Clippy finds the best moments in streams and videos, cuts them into vertical Shorts and posts them to YouTube and TikTok, all on your own PC.</p>
     <p>Source code and updates: <a href="https://github.com/FrostyDog222/Clippy" target="_blank" rel="noopener">github.com/FrostyDog222/Clippy</a><br>Based on the MIT-licensed gtavi-claudecode project by Bodila51.</p></div></div>
+  <div class="card"><h2>Updates</h2>
+    <div class="sw"><div><div>Update automatically</div><small style="color:var(--mut)">Checks GitHub every few hours and installs new versions while nothing is running. Only program files are replaced: your settings, keys, accounts, clips and history are never touched.</small></div><button class="tg" id="au" onclick="setPost('auto_update','au')"></button></div>
+    <div id="updmsg" class="hint" style="margin:10px 0">Not checked yet.</div>
+    <div class="row"><button class="btn" id="updchk" onclick="updCheck()">Check for updates</button> <button class="btn pri" id="updgo" onclick="updApply()" hidden>Update now</button></div>
+  </div>
   <div class="card"><h2>Setup check</h2><div class="chk" id="chk"></div>
   <div class="hint">Also needed: you must be signed in to YouTube and TikTok (see Accounts in Settings).</div></div>
   <div class="card safe"><h2><svg class="ic"><use href="#i-shield"/></svg> Privacy and safety</h2>
@@ -304,10 +313,10 @@ api:'<b>Official APIs. Read before using:</b><br>&bull; <b>YouTube:</b> a new, u
 function upl(){$('apibox').style.display=draft.title_writer==='api'?'block':'none';$('upw').innerHTML=UPW[draft.uploader]||''}
 const MODES={rotate:'Goes through your list in order.',random:'Picks a random streamer that has not posted today.',fixed:'Only your list, never falls back to trending.'};
 let srv=null,draft=null;
-const snap=c=>JSON.stringify([NUM.map(k=>+c[k]),TXT.map(k=>c[k]),c.creator_mode,c.creators,!!c.use_trending_fallback,!!c.trending_any,!!c.auto_post,c.post_youtube!==false,c.post_tiktok!==false,!!c.stop_on_strike,!!c.ai_check,c.ai_profiles,c.ai_active,c.ai_check_profile,c.ai_title_profile,c.cleanup_sources!==false,c.languages]);
+const snap=c=>JSON.stringify([NUM.map(k=>+c[k]),TXT.map(k=>c[k]),c.creator_mode,c.creators,!!c.use_trending_fallback,!!c.trending_any,!!c.auto_post,c.post_youtube!==false,c.post_tiktok!==false,!!c.stop_on_strike,c.auto_update!==false,!!c.ai_check,c.ai_profiles,c.ai_active,c.ai_check_profile,c.ai_title_profile,c.cleanup_sources!==false,c.languages]);
 const dirty=()=>draft&&srv&&snap(draft)!==snap(srv);
 function toast(m,err){const t=$('toast');t.textContent=m;t.className='toast show'+(err?' err':'');setTimeout(()=>t.className='toast',2600)}
-function fill(){NUM.concat(TXT).forEach(k=>$(k).value=draft[k]);renderMode();renderChips();$('tf').className='tg'+(draft.use_trending_fallback?' on':'');$('ta').className='tg'+(draft.trending_any?' on':'');$('aup').className='tg'+(draft.auto_post?' on':'');$('apstate').textContent=draft.auto_post?'ON':'OFF';$('pyt').className='tg'+(draft.post_youtube!==false?' on':'');$('ptt').className='tg'+(draft.post_tiktok!==false?' on':'');$('ss').className='tg'+(draft.stop_on_strike?' on':'');$('ac').className='tg'+(draft.ai_check?' on':'');$('qt').className='tg'+((draft.quality||'strict')==='strict'?' on':'');$('cs').className='tg'+(draft.cleanup_sources!==false?' on':'');renderLangs();renderProf();pub();upl()}
+function fill(){NUM.concat(TXT).forEach(k=>$(k).value=draft[k]);renderMode();renderChips();$('tf').className='tg'+(draft.use_trending_fallback?' on':'');$('ta').className='tg'+(draft.trending_any?' on':'');$('aup').className='tg'+(draft.auto_post?' on':'');$('apstate').textContent=draft.auto_post?'ON':'OFF';$('pyt').className='tg'+(draft.post_youtube!==false?' on':'');$('ptt').className='tg'+(draft.post_tiktok!==false?' on':'');$('ss').className='tg'+(draft.stop_on_strike?' on':'');$('au').className='tg'+(draft.auto_update!==false?' on':'');$('ac').className='tg'+(draft.ai_check?' on':'');$('qt').className='tg'+((draft.quality||'strict')==='strict'?' on':'');$('cs').className='tg'+(draft.cleanup_sources!==false?' on':'');renderLangs();renderProf();pub();upl()}
 function pub(){const d=new Date(draft.start_date+'T00:00');d.setDate(d.getDate()+(+draft.private_days||0));
 $('pubnote').textContent=(+draft.private_days)?'Goes public on '+d.toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'}):'Public from the start'}
 function renderMode(){document.querySelectorAll('#mode button').forEach(b=>b.className=b.dataset.v===draft.creator_mode?'on':'');$('modenote').textContent=MODES[draft.creator_mode]}
@@ -394,7 +403,7 @@ if(stale){$('pm').dataset.state='fail';bar.style.width='100%';bar.style.backgrou
 const age=(Date.now()-new Date(p.ts))/60000,fail=p.pct<0,done=p.pct>=100;bar.style.width=(fail?100:Math.min(100,p.pct))+'%';bar.style.background=fail?'var(--bad)':'var(--acc)';
 $('pm').dataset.state=fail?'fail':done?'done':'busy';$('pm').textContent=(fail?'Stopped or failed: ':done?'Done: ':p.pct+'%  ')+p.msg+(run&&age>20?'  (no update for '+Math.round(age)+' min, may be stalled)':'')}
 async function load(force){let d;try{d=await (await fetch('/api/state')).json()}catch(e){$('status').textContent='Dashboard closed';return}
-Object.assign(LANGSET,d.all_languages||{});const first=!srv;srv=d.config;if(srv.display_name==null)srv.display_name='';setWelcome();if(first||force||!dirty()){draft=JSON.parse(JSON.stringify(srv));fill()}chg();
+Object.assign(LANGSET,d.all_languages||{});const first=!srv;srv=d.config;if(srv.display_name==null)srv.display_name='';setWelcome();updShow(d.update);if(first||force||!dirty()){draft=JSON.parse(JSON.stringify(srv));fill()}chg();
 const p=d.progress,run=p&&p.pct>0&&p.pct<100&&(Date.now()-new Date(p.ts))<45*60000&&!d.run_stale;setRunLog(d.runlog);setTiming(d.run_timing);if(d.run_suspended)$('rt').textContent='Paused: the run is frozen exactly where it was and continues when you press Resume.';
 $('dot').className='dot '+(d.paused?'bad':run?'run':srv.autopilot?'on':'');
 $('status').textContent=d.paused?'Paused':d.run_stale?'Last run stopped':run?'Posting now':srv.autopilot?'Autopilot on, waiting':'Idle';setRunLbl(d.paused?'Paused':d.run_stale?'Stopped':run?'Running...':'Idle',run&&!d.paused);
@@ -416,6 +425,11 @@ $('ins').innerHTML=P.insights.length?P.insights.map(x=>'&bull; '+esc(x)).join('<
 lastPerf=P;renderPerf()}
 $('log').textContent=d.log||'(empty)';prog(p,run,d.run_stale)}
 
+function updShow(u){u=u||{};const m=$('updmsg');if(!m)return;
+ let t='Not checked yet.';if(u.off)t='Updates are switched off for this copy.';else if(u.error)t=u.error;else if(u.restart)t='Updated ('+(u.files||0)+' files). Close and start the dashboard again to use the new version.';else if(u.available)t='A new version is available'+(u.message?': '+u.message:'')+'.';else if(u.checked)t='Clippy is up to date (checked '+u.checked.replace('T',' ')+').';
+ m.textContent=t;$('updgo').hidden=!u.available||!!u.off;$('updchk').hidden=!!u.off}
+async function updCheck(){$('updmsg').textContent='Checking...';const r=await fetch('/api/update/check',{method:'POST'});if(!r.ok)toast(await r.text(),1);load()}
+async function updApply(){if(!confirm('Install the update now? Your settings and clips stay as they are.'))return;$('updmsg').textContent='Updating...';const r=await fetch('/api/update/apply',{method:'POST'});if(!r.ok)toast(await r.text(),1);load()}
 function setRunLbl(t,on){const l=$('runlbl');l.lastChild.textContent=t;l.classList.toggle('on',!!on);$('rundot').className='dot'+(on?' run':'')}
 function setWelcome(){const n=(srv&&srv.display_name)||'';$('welcome').textContent='Welcome back'+(n?', '+n:'')+'!'}
 const TABS=['dashboard','history','settings','about'];

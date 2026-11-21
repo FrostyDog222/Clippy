@@ -431,6 +431,7 @@ def clean(new, old):
     out["use_trending_fallback"] = bool(new["use_trending_fallback"])
     out["trending_any"] = bool(new.get("trending_any", False))
     out["display_name"] = re.sub(r"\s+", " ", str(new.get("display_name", ""))).strip()[:40]  # the name in the welcome line
+    out["auto_update"] = bool(new.get("auto_update", True))  # install new Clippy versions by itself (settings and clips are never touched)
     out["auto_post"] = bool(new.get("auto_post", False))  # OFF (default): finished clips wait in "Ready to post" until the Post button is pressed
     out["post_youtube"] = bool(new.get("post_youtube", True)); out["post_tiktok"] = bool(new.get("post_tiktok", True))  # where to post
     out["topic"] = re.sub(r"\s+", " ", str(new.get("topic", "GTA 6"))).strip()[:60]  # what to look for (a game or any subject); empty = no topic
@@ -651,6 +652,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                               "today": [p for p in posts if p.get("date") == today and not p.get("deleted")], "log": log,
                                               "progress": progress(), "signin": signin_state(), "jobs_mb": cleanup.jobs_mb(), "all_languages": textutil.LANGS, "perf": perf(), "ai_keys": {p["id"]: secretstore.exists(f"key_{p['id']}") for p in c.get("ai_profiles", [])}, "blocked": blocked_msg(c), "live": live_status(),
                                               "review": review_items(), "run_stale": run_stale(), "run_timing": run_timing(), "run_suspended": run_suspended(),
+                                              "update": update_info(),
                                               "runlog": (R / "autorun.log").read_text(encoding="utf-8", errors="replace")[-8000:] if (R / "autorun.log").exists() else "",
                                               "why": "Next run is due now" if ok else "Waiting: " + why,
                                               "mode": tick.decide({**c, "posts_per_day": 99, "window_start": "00:00", "window_end": "23:59", "min_gap_minutes": 0}, [], dt.datetime.now())[2]}))
@@ -671,6 +673,10 @@ class H(http.server.BaseHTTPRequestHandler):
                     pause_run()
                 except RuntimeError as e:
                     return self.send(409, str(e), "text/plain")
+        elif self.path in ("/api/update/check", "/api/update/apply"):
+            if self.path.endswith("apply") and run_alive():
+                return self.send(409, "A run or post is in progress: update when it has finished", "text/plain")
+            update_run(self.path.rsplit("/", 1)[1], wait=True)
         elif self.path == "/api/clearlog":
             (R / "autorun.log").write_text("", encoding="utf-8")
         elif self.path == "/api/custom":
@@ -790,6 +796,38 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
 
+def update_run(what, wait=False):
+    """Runs scripts/update_clippy.py (check | apply) hidden; it only talks to GitHub and only replaces program files."""
+    try:
+        subprocess.run([BGPY, "scripts/update_clippy.py", what], cwd=R, creationflags=NOWIN, timeout=180 if wait else 300)
+    except Exception:
+        pass
+
+
+def update_info():
+    try:
+        st = json.loads((R / "update_state.json").read_text(encoding="utf-8"))
+    except Exception:
+        st = {}
+    st["off"] = (R / ".no_update").exists(); st["auto"] = bool(read_cfg().get("auto_update", True))
+    return st
+
+
+def update_loop():
+    """Every 6 hours (and shortly after start): look for a newer Clippy; with 'Update automatically' on, install it while nothing is running."""
+    time.sleep(120)
+    while True:
+        try:
+            if (R / ".no_update").exists():
+                time.sleep(6 * 3600); continue
+            update_run("check")
+            if update_info().get("available") and read_cfg().get("auto_update", True) and not run_alive() and not running():
+                update_run("apply")
+        except Exception:
+            pass
+        time.sleep(6 * 3600)
+
+
 def ytdlp_loop():
     """yt-dlp daily update check while the dashboard runs (every run also checks before it starts; both share the 24 h / 6 h stamp in ytdlp_update.json)."""
     time.sleep(90)
@@ -807,6 +845,7 @@ if __name__ == "__main__":
     except Exception:
         pass
     threading.Thread(target=ytdlp_loop, daemon=True).start()
+    threading.Thread(target=update_loop, daemon=True).start()
     threading.Thread(target=autopilot_loop, daemon=True).start()
     threading.Thread(target=live_loop, daemon=True).start()
     threading.Thread(target=stats_loop, daemon=True).start()
