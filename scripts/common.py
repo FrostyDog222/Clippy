@@ -29,6 +29,8 @@ def youtube_cookie_args():
         here = Path(__file__).resolve().parent.parent
         cfg = json.loads((here / "autopost_config.json").read_text(encoding="utf-8"))
         prof = here / "chrome_profile"
+        if (here / "post.lock").exists():  # an upload is using that Chrome profile right now: its cookie file is locked and cannot be copied (the run would fail), so go without cookies this once
+            return []
         if cfg.get("youtube_cookies") and prof.exists():
             return ["--cookies-from-browser", f"chrome:{prof}"]
     except Exception:
