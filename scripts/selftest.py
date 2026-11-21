@@ -335,6 +335,38 @@ def test_clips_per_run_limits():
     assert d.clean({**base, "clips_per_run": 9}, old)["clips_per_run"] == 3  # the manual number is saved only by its own control (a stale settings page cannot overwrite it)
 
 
+def test_source_subtitles_are_detected_and_clippys_are_skipped():
+    import cv2, numpy as np
+    import caption_check as cc
+    rng = np.random.default_rng(1)
+    def scene(text=None, scale=1.6, color=(255, 255, 255)):
+        f = (rng.integers(40, 120, (720, 1280, 3))).astype(np.uint8)
+        f = cv2.GaussianBlur(f, (0, 0), 6)  # a soft, game-like picture
+        if text:
+            (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, scale, 4)
+            org = ((1280 - tw) // 2, 600)
+            cv2.putText(f, text, org, cv2.FONT_HERSHEY_DUPLEX, scale, (0, 0, 0), 10, cv2.LINE_AA)  # dark outline like real captions
+            cv2.putText(f, text, org, cv2.FONT_HERSHEY_DUPLEX, scale, color, 4, cv2.LINE_AA)
+        return f
+    assert cc.caption_line(scene("THIS IS NICE")) and cc.caption_line(scene("LORD HAVE MERCY", color=(0, 230, 255)))  # bold white / yellow caption line
+    assert not cc.caption_line(scene()) and not cc.caption_line(scene("small game subtitle here", scale=0.55))  # nothing / the small in-game subtitle
+    # the wiring: judge records it, and the cut gets "--captions none"
+    keep = (cc.has_burned_captions, autorun.log, autorun.CFG, autorun.ORIGIN)
+    import json, tempfile
+    tmp = Path(tempfile.mkdtemp()); (tmp / "transcript.json").write_text("[]"); (tmp / "candidates.json").write_text(json.dumps({"source": "none.mp4"}))
+    autorun.log = lambda *a, **k: None; autorun.CFG = {"title_writer": "template", "quality": "relaxed"}; autorun.ORIGIN = "video"
+    try:
+        c = {"start": 5, "end": 30, "why": ["a"], "sig": {}, "text": "", "peak": 12, "ai": None}
+        cc.has_burned_captions = lambda *a, **k: (True, 0.6)
+        jd = autorun.judge({"title": "t", "id": "x", "twitch": True}, 6.0, tmp, 1, c, None)
+        assert jd and jd["has_caps"] and autorun.caption_args(jd) == ["--captions", "none"]
+        cc.has_burned_captions = lambda *a, **k: (False, 0.0)
+        jd = autorun.judge({"title": "t", "id": "x", "twitch": True}, 6.0, tmp, 1, c, None)
+        assert jd and not jd["has_caps"] and autorun.caption_args(jd) == []
+    finally:
+        cc.has_burned_captions, autorun.log, autorun.CFG, autorun.ORIGIN = keep
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

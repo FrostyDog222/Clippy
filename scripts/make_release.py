@@ -10,7 +10,7 @@ OUT = R / "release"
 STAGE = OUT / "Clippy"
 FILES = ["dashboard.py", "dashboard.html", "dashboard.bat", "setup.bat", "tick.py", "requirements.txt", "requirements-extra.txt", "requirements.lock.txt",
          "LICENSE", "README_CLIPPY.md", ".gitignore",
-         "scripts/ai_check.py", "scripts/ai_title.py", "scripts/api_upload.py", "scripts/autorun.py", "scripts/check.py", "scripts/cleanup.py", "scripts/common.py",
+         "scripts/ai_check.py", "scripts/caption_check.py", "scripts/ai_title.py", "scripts/api_upload.py", "scripts/autorun.py", "scripts/check.py", "scripts/cleanup.py", "scripts/common.py",
          "scripts/cut.py", "scripts/facecam.py", "scripts/friendly.py", "scripts/init_config.py", "scripts/live.py", "scripts/live_watch.py", "scripts/make_meta.py", "scripts/make_release.py",
          "scripts/moments.py", "scripts/netguard.py", "scripts/post_clip.py", "scripts/progress.py", "scripts/secretstore.py", "scripts/security_audit.py",
          "scripts/sitecustomize_clippy.py", "scripts/stats.py", "scripts/streams.py", "scripts/textutil.py", "scripts/topic.py", "scripts/twitch.py", "scripts/learn.py", "scripts/selftest.py", "scripts/update_clippy.py", "scripts/update_ytdlp.py",

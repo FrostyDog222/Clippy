@@ -498,6 +498,14 @@ def _stage2(v, job, st):
             c = {**c, "start": ns}; cut_range = ["--start", f"{ns:.2f}", "--end", f"{c['end']:.2f}"]
     except Exception:
         pass
+    caps, caps_share = False, 0.0
+    try:  # the source already has burned-in subtitles (a streamer's clip editor, a clipper): Clippy does not add its own on top of them
+        import caption_check
+        caps, caps_share = caption_check.has_burned_captions(json.loads((job / "candidates.json").read_text(encoding="utf-8"))["source"], c["start"], c["end"])
+        if caps:
+            log(f"  the source already has subtitles (in {caps_share:.0%} of the sampled frames): Clippy's own captions are skipped")
+    except Exception:
+        pass
     ai = [x for x in (win_score, res_score, c.get("ai")) if x is not None]
     adj = (sum(ai) / len(ai) if ai else 5.0) - sum(p for p, _ in pen)
     rank = adj + score * 0.3 + bonus  # AI judgement first (minus penalties, plus a bonus when the streamer reacts), the local viral score second
@@ -506,7 +514,7 @@ def _stage2(v, job, st):
     dur_ = max(1.0, float(c.get("end", 0)) - float(c.get("start", 0)))
     feat = {"win": win_score, "frames": res_score, "ai": c.get("ai"), "score": score, "penalty": round(sum(p for p, _ in pen), 2), "sig": c.get("sig"), "why": c.get("why"),
             "seconds": round(dur_, 1), "twitch": 1 if v.get("twitch") else 0, "views_log": round(__import__("math").log10((v.get("views") or 0) + 1), 2),
-            "wps": round(len(str(c.get("text") or "").split()) / dur_, 2), "channel": v.get("channel"),  # more for the learning: length, source, popularity, speech speed, which streamer
+            "wps": round(len(str(c.get("text") or "").split()) / dur_, 2), "channel": v.get("channel"), "source_captions": caps_share,  # more for the learning: length, source, popularity, speech speed, which streamer
             "notes": [f"-{p:g} {w}" for p, w in pen] + [f"+{p:g} {w}" for p, w in bonus_notes], "bit": (win or {}).get("why"), "scene": scene}  # notes/bit/scene: shown in the dashboard score tooltip
     try:  # after enough 👍/👎 ratings: a small nudge (at most +-1) toward moments that look like the ones the user liked (scripts/learn.py)
         import learn
@@ -515,7 +523,7 @@ def _stage2(v, job, st):
         nudge = 0.0
     if nudge:
         rank += nudge; feat["learned"] = nudge; feat["notes"].append(f"{nudge:+g} learned from your ratings")
-    return {"c": c, "cut_range": cut_range, "scene": scene, "rank": rank, "weak": adj < 4.5, "feat": feat}  # weak = only a fallback for a run that would otherwise find nothing
+    return {"c": c, "cut_range": cut_range, "scene": scene, "rank": rank, "weak": adj < 4.5, "feat": feat, "has_caps": bool(caps)}  # weak = only a fallback for a run that would otherwise find nothing
 
 def judge(v, score, job, n, c, creator):
     """Both stages for one moment (used by the live watcher and anywhere a single moment is judged)."""
@@ -537,6 +545,11 @@ def expire_rejected(st, days=4):
         if (now - dt.datetime.fromisoformat(t)).days < days:
             keep.append(vid)
     st["rejected"] = keep
+
+
+def caption_args(jd):
+    """cut.py switch: no Clippy captions when the source video already carries its own."""
+    return ["--captions", "none"] if (jd or {}).get("has_caps") else []
 
 
 def try_candidate(v, score, job, n, c, creator, dry, memo=None, review_only=False):
@@ -570,7 +583,7 @@ def try_candidate(v, score, job, n, c, creator, dry, memo=None, review_only=Fals
     clip = None
     for layout in LAYOUTS:
         extra = ["--title", seam, "--title-style", "outline"] if (layout == "facecam" and seam) else []  # big caps title on the seam (webcam layout), only when there is a real one
-        r = sh([PY, "scripts/cut.py", str(job), "--pick", str(n), "--layout", layout, "--hook", hook, *extra, *cut_range], timeout=1800)
+        r = sh([PY, "scripts/cut.py", str(job), "--pick", str(n), "--layout", layout, "--hook", hook, *extra, *cut_range, *caption_args(jd)], timeout=1800)
         cp = job / "edits" / f"clip_{n}.mp4"
         chk = sh([PY, "scripts/check.py", str(cp)])
         ok = cp.exists() and "RESULT: PASS" in chk.stdout
