@@ -231,8 +231,11 @@ def main():
             hype[int(w["s"])] += 1
     hype = smooth(hype, 5)
     heat = np.zeros(n)
+    off = (a.start or 0) * 60  # the heatmap is for the whole video; a sliced download starts later (the chat below is shifted the same way)
     for h in (info.get("heatmap") or []):
-        heat[int(h["start_time"]):int(math.ceil(h["end_time"]))] = h["value"]
+        i0, i1 = max(0, int(h["start_time"] - off)), min(n, int(math.ceil(h["end_time"] - off)))
+        if i1 > i0:
+            heat[i0:i1] = h["value"]
     chat, react = chat_series(d, n, a.chat, info, a.start * 60)
     rate = smooth(react, 10); share = rate / (smooth(chat, 10) + 3)  # reactions per second, and their share of all messages
     chatz = smooth(0.5 * np.clip(z(rate), 0, None) + 0.5 * np.clip(z(share), 0, None), 3)

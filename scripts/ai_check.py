@@ -143,10 +143,11 @@ def refine_window(cfg, words, start, end, max_len, min_len=12):
     for i, w in enumerate(words):
         if e - 6 <= w["e"] <= e + 4:
             nxt = words[i + 1]["s"] if i + 1 < len(words) else w["e"] + 9
-            if w["w"].rstrip()[-1:] in ".?!" or nxt - w["e"] > 0.6:
-                ends.append(w["e"])
+            if w["w"].strip().endswith((".", "?", "!")) or nxt - w["e"] > 0.6:
+                ends.append((w["e"], nxt))
     if ends:
-        e2 = min(ends, key=lambda t: abs(t - e)) + 0.5
+        we, nxt = min(ends, key=lambda t: abs(t[0] - e))
+        e2 = we + min(1.0, max(0.4, nxt - we - 0.15))  # let the reaction land (up to 1 s after the last word) but never start the next sentence
     if e2 - s2 > max_len + 1:
         e2 = s2 + max_len
     try:

@@ -27,11 +27,14 @@ MAX_W = 1280  # analysis width
 
 
 def model_path():
-    bundled = Path(__file__).resolve().parent.parent / "models" / MODEL.name  # shipped inside the release: no download needed
-    if bundled.exists():
-        import hashlib
-        if hashlib.sha256(bundled.read_bytes()).hexdigest() == MODEL_SHA256:
-            return str(bundled)
+    import hashlib
+    # known places, checked by hash: shipped with the release, the profile cache (also when LOCALAPPDATA is missing/redirected in a background process)
+    for p in (Path(__file__).resolve().parent.parent / "models" / MODEL.name, MODEL, Path.home() / "AppData" / "Local" / "gtavi-claudecode" / "models" / MODEL.name):
+        try:
+            if p.exists() and hashlib.sha256(p.read_bytes()).hexdigest() == MODEL_SHA256:
+                return str(p)
+        except OSError:
+            pass
     if not MODEL.exists() or MODEL.stat().st_size < 100_000:
         MODEL.parent.mkdir(parents=True, exist_ok=True)
         tmp = MODEL.with_suffix(".part")

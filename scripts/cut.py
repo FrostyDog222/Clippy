@@ -315,8 +315,12 @@ def main():
         gx = game_offset(c['source'], s0, e0, src, [float(t) for t in cam.split(':')])
     v = video_filter(layout, cam, ass, band=band, cam_side=side, src=src, game_x=gx, face_expr=face_expr)
     mp4 = out / f"clip_{a.pick}.mp4"
+    dur = max(1.0, e0 - s0)  # a short fade-out (picture + sound) so the clip ends on purpose instead of looking like a random cut
+    vmap = "[vo]"
+    if v.rstrip().endswith("[vo]") and dur > 6:
+        v = v.rstrip() + f";[vo]fade=t=out:st={dur - 0.3:.2f}:d=0.3[vf]"; vmap = "[vf]"
     run([tool("ffmpeg"), "-y", "-v", "error", "-ss", f"{s0:.2f}", "-to", f"{e0:.2f}", "-i", c["source"],
-         "-filter_complex", v, "-map", "[vo]", "-map", "0:a?", "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
+         "-filter_complex", v, "-map", vmap, "-map", "0:a?", "-af", f"loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=out:st={dur - 0.35:.2f}:d=0.35",
          "-c:v", "libx264", "-preset", "slow", "-crf", "17", "-maxrate", "6M", "-bufsize", "12M", "-profile:v", "high", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
          "-ar", "48000", "-movflags", "+faststart", str(mp4)])
     info = c.get("info", {})

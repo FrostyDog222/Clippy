@@ -45,8 +45,17 @@ def progress(pct, msg):
 
 
 def sh(args, **kw):
-    return subprocess.run(args, cwd=R, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                          env={**__import__("os").environ, "CLIP_DESK_HOME": str(R), "PYTHONIOENCODING": "utf-8", "HF_HUB_DISABLE_SYMLINKS_WARNING": "1"}, **kw)
+    """subprocess.run, but a time-out also kills the children (yt-dlp, ffmpeg started by the script), not just the script."""
+    timeout = kw.pop("timeout", None)
+    p = subprocess.Popen(args, cwd=R, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+                         env={**__import__("os").environ, "CLIP_DESK_HOME": str(R), "PYTHONIOENCODING": "utf-8", "HF_HUB_DISABLE_SYMLINKS_WARNING": "1"}, **kw)
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"], capture_output=True, creationflags=0x08000000)
+        out, err = p.communicate()
+        raise subprocess.TimeoutExpired(args, timeout, out, err)
+    return subprocess.CompletedProcess(args, p.returncode, out, err)
 
 
 CACHE_F = R / "search_cache.json"
@@ -246,6 +255,8 @@ def face_motion(clip):
     return float(np.abs(np.diff(fr, axis=0)).mean()) if len(fr) > 1 else 0.0
 
 
+COMPILATION = re.compile(r"\b(compilation|funniest moments|funny moments|best moments|best of|montage)\b", re.I)
+NEAR = None  # the closest moment of this run that missed the bar: used (for review only) when nothing else was found
 MIN_FACE_COVERAGE = 0.75  # share of sampled frames whose webcam panel really shows a face (the streamer may switch OBS scenes mid-clip)
 
 
@@ -327,7 +338,7 @@ def snap_start(src, start):
         cuts = [t0 + float(m) for m in re.findall(r"pts_time:([0-9.]+)", r.stderr)]
     except Exception:
         return None
-    ok = [x for x in cuts if start - 3.5 <= x <= start + 0.3]
+    ok = [x for x in cuts if start - 2.0 <= x <= start + 0.3]  # a cut further back would land mid-sentence of the previous bit
     return max(ok) + 0.05 if ok else None
 
 
@@ -335,8 +346,14 @@ def judge(v, score, job, n, c, creator):
     """The checks of one moment (score bar, AI bit finder, AI preview / frame check, visual check). Returns None (not good enough) or what the cut needs plus a rank."""
     log(f"  moment {n}: score {score} ({', '.join(c['why'])})")
     strict = CFG.get("quality", "strict") == "strict"  # quality over quantity is ON unless the user switches it off
-    if strict and ORIGIN != "live" and score < 5.0:  # the viral score (voice, laughter, swearing, action, chat...): 5+ = clearly strong; relaxed accepts 4+ (see moments.STRONG)
-        log(f"  viral score {score} is below the 5.0 bar of 'quality over quantity', skipping"); return None
+    # strict no longer means "reject on any single weak signal" (that left runs empty): soft problems are penalties on one rank, only clear junk is rejected
+    pen = []
+    if strict and ORIGIN != "live" and score < 5.0:  # the viral score (voice, laughter, swearing, action, chat...): 5+ = clearly strong
+        if score < 4.0:
+            log(f"  viral score {score} is far below the bar, skipping"); return None
+        pen.append((1.0, f"viral score {score} is under 5"))
+    if COMPILATION.search(v.get("title", "")):  # a compilation is already edited (changing webcam layout, cuts mid-moment) and is the "reused content" risk
+        pen.append((1.5, "source is a compilation"))
     cut_range = []
     win = None
     scene, win_score, res_score = None, None, None
@@ -344,17 +361,24 @@ def judge(v, score, job, n, c, creator):
         try:
             import ai_check
             allw = json.loads((job / "transcript.json").read_text(encoding="utf-8"))
-            win = ai_check.refine_window(CFG, allw, c["start"], c["end"], LIMITS[1])
+            win = ai_check.refine_window(CFG, allw, c["start"], c["end"], LIMITS[1], min(12, LIMITS[0]))
         except Exception as e:
             win = None; log(f"  AI bit finder unavailable ({str(e)[:60]})")
         if not win and strict and ORIGIN != "live" and CFG.get("title_writer") == "api":  # nothing real judged this moment (no AI answer): the local score alone is not enough
-            log("  no AI read of what is said in this moment, skipping (quality over quantity)"); return None
+            pen.append((1.0, "no AI read of what is said"))
         if win:
             ws, we = win["start"], win["end"]
             log(f"  AI bit finder: {c['start']:.0f}-{c['end']:.0f}s -> {ws:.0f}-{we:.0f}s ({we - ws:.0f}s) score {win['score']:g}/10, speaker {win['speaker']}, "
                 f"standalone {win['standalone']}{', risky (flag only)' if win['risky'] else ''}: {win['why']}")
-            if strict and ORIGIN != "live" and (win["score"] < 6 or (win["speaker"] == "game" and win["score"] < 7) or (not win["standalone"] and win["score"] < 6)):
-                log("  the AI rates this bit as weak (game-only dialogue or not standalone), skipping"); return None
+            if strict and ORIGIN != "live":
+                if win["score"] < 4.5:
+                    log("  the AI rates this bit as weak, skipping"); return None
+                if win["score"] < 6:
+                    pen.append((0.5 * (6 - win["score"]), f"bit scored {win['score']:g}/10"))
+                if win["speaker"] == "game" and win["score"] < 7:
+                    pen.append((1.0, "game-only dialogue"))
+                if not win["standalone"] and win["score"] < 6:
+                    pen.append((1.0, "not standalone"))
             win_score = win["score"]
             c = {**c, "start": ws, "end": we, "text": " ".join(w["w"] for w in allw if ws <= w["s"] < we)[:400]}
             cut_range = ["--start", f"{ws:.2f}", "--end", f"{we:.2f}"]
@@ -373,9 +397,13 @@ def judge(v, score, job, n, c, creator):
         if res["ok"] is False and res.get("gta") and (win_score or 0) >= 7 and not ai_check.MUNDANE.search(res.get("what", "")):  # frames are a weak judge: a clearly strong bit (7+) is not vetoed by a quiet moment in them
             log(f"  AI frame check rated {res.get('score')}/10 but the bit scored {win_score:g}/10: keeping it"); res["ok"] = True
         if res["ok"] is False and (CFG.get("ai_check") or strict):
-            log(f"  AI frame check: skipping ({res['reason']})"); return None
-        if res.get("cutscene") and ORIGIN != "live" and (res.get("score") or 0) < 7:  # a cutscene can be funny, but a plain one is not a clip: it needs a clearly funny rating (7+)
-            log(f"  AI frame check: plain cutscene rated {res.get('score')}/10, skipping ({res.get('what', '')[:70]})"); return None
+            if ORIGIN == "live" or not res.get("gta") or (res.get("score") or 0) <= 3:  # clearly not the topic / nothing happening: out
+                log(f"  AI frame check: skipping ({res['reason']})"); return None
+            pen.append((2.0, f"frame check: {res['reason'][:60]}"))  # the 3 frames are a weak judge: a penalty, not a veto
+        if res.get("cutscene") and ORIGIN != "live" and (res.get("score") or 0) < 7:  # a cutscene can be funny, but a plain one needs a clearly funny rating
+            if (res.get("score") or 0) < 6:
+                log(f"  AI frame check: plain cutscene rated {res.get('score')}/10, skipping ({res.get('what', '')[:70]})"); return None
+            pen.append((1.5, "plain cutscene"))
         scene = res["what"] or None
         res_score = res.get("score") if res.get("ok") is not None else None
         log(f"  AI saw: {scene}" if scene else f"  AI frame look not possible ({res['reason']})")
@@ -390,21 +418,40 @@ def judge(v, score, job, n, c, creator):
             log(f"  visual check not possible ({str(e)[:60]})")
     try:
         ns = snap_start(json.loads((job / "candidates.json").read_text(encoding="utf-8"))["source"], c["start"])
-        if ns and abs(ns - c["start"]) > 0.1:
+        if ns and abs(ns - c["start"]) > 0.1 and c["end"] - ns <= LIMITS[1]:  # never past the length limit
             log(f"  start moved {c['start']:.1f}s -> {ns:.1f}s to a scene cut")
             c = {**c, "start": ns}; cut_range = ["--start", f"{ns:.2f}", "--end", f"{c['end']:.2f}"]
     except Exception:
         pass
     ai = [x for x in (win_score, res_score, c.get("ai")) if x is not None]
-    rank = (sum(ai) / len(ai) if ai else 5.0) + score * 0.3  # AI judgement first, the local viral score second
-    return {"c": c, "cut_range": cut_range, "scene": scene, "rank": rank}
+    adj = (sum(ai) / len(ai) if ai else 5.0) - sum(p for p, _ in pen)
+    rank = adj + score * 0.3  # AI judgement first (minus penalties), the local viral score second
+    if pen:
+        log("  penalties: " + "; ".join(f"-{p:g} {w}" for p, w in pen) + f" -> rank {rank:.1f}")
+    return {"c": c, "cut_range": cut_range, "scene": scene, "rank": rank, "weak": adj < 4.5}  # weak = only a fallback for a run that would otherwise find nothing
 
 
-def try_candidate(v, score, job, n, c, creator, dry, memo=None):
+def reject(st, sf, vid):
+    """Remember a video that gave nothing, for 4 days only (a long stream has other parts, a video can be judged differently next time)."""
+    st["rejected"].append(vid); st.setdefault("rejected_at", {})[vid] = dt.datetime.now().isoformat(timespec="seconds")
+    sf.write_text(json.dumps(st, indent=1), encoding="utf-8")
+
+
+def expire_rejected(st, days=4):
+    at, keep = st.setdefault("rejected_at", {}), []
+    now = dt.datetime.now()
+    for vid in dict.fromkeys(st["rejected"]):
+        t = at.setdefault(vid, now.isoformat(timespec="seconds"))  # an old entry without a date starts its 4 days now
+        if (now - dt.datetime.fromisoformat(t)).days < days:
+            keep.append(vid)
+    st["rejected"] = keep
+
+
+def try_candidate(v, score, job, n, c, creator, dry, memo=None, review_only=False):
     """Cut one moment and post it. Returns an exit code when done (posted / dry run), or None when this moment is not good enough.
     memo = the result of judge() when the caller already judged (and ranked) this moment."""
     jd = memo or judge(v, score, job, n, c, creator)
-    if jd is None:
+    if jd is None or (jd.get("weak") and not memo):  # a weak moment is only cut when the caller chose it on purpose (memo)
         return None
     c, cut_range, scene = jd["c"], jd["cut_range"], jd["scene"]
     progress(50, f"Cutting clip (score {score})")
@@ -456,12 +503,12 @@ def try_candidate(v, score, job, n, c, creator, dry, memo=None):
         d0.update({"source_id": v["id"], "origin": ORIGIN, "score": score, "creator": creator or "", "seconds": round(d0.get("end", 0) - d0.get("start", 0), 1)})
         cj.write_text(json.dumps(d0, ensure_ascii=False, indent=1), encoding="utf-8")
         clip.with_name(clip.name.replace("clip_", "meta_")).with_suffix(".json").unlink(missing_ok=True)
-    except Exception:
-        pass
+    except Exception as e:
+        log(f"  could not write the clip details ({str(e)[:80]}): this video may be clipped again later")
     progress(65, "Clip checked")
     if dry:
         progress(100, f"Dry run: would post {clip.name}"); log(f"DRY RUN: {clip}"); return 0
-    if not CFG.get("auto_post", False):  # "Post videos automatically" is OFF: the clip waits in the dashboard (Ready to post) for the user's Post button
+    if review_only or not CFG.get("auto_post", False):  # a near-miss is never posted by itself; "Post videos automatically" OFF: the clip waits in the dashboard (Ready to post) for the user's Post button
         stem = queue_for_review(clip)
         progress(100, "Clip ready in the dashboard: press Post to publish it"); log(f"READY FOR REVIEW: {stem}")
         return 0
@@ -484,12 +531,15 @@ def try_videos(vids, st, sf, dry, base_pct, creator=None):
         if not cands:
             if v.get("custom"):
                 log("  no strong moments in this link"); continue  # a link the user chose is never put on the rejected list
-            log("  no strong moments; rejected"); st["rejected"].append(v["id"]); sf.write_text(json.dumps(st, indent=1), encoding="utf-8"); continue
+            log("  no strong moments; rejected for 4 days"); reject(st, sf, v["id"]); continue
         judged = []  # judge the best few moments first, then cut the best-ranked one (AI judgement + viral score), not just the first that passes
+        weak = []
         for score, job, n, c in cands[: (4 if not v.get("custom") else 4 + 2 * (CUSTOM or {}).get("clips", 1))]:
             jd = judge(v, score, job, n, c, creator)
-            if jd:
+            if jd and (not jd["weak"] or v.get("custom")):  # a link the user chose gets its best moments even when they are only fair
                 judged.append((jd["rank"], score, job, n, jd))
+            elif jd:
+                weak.append((jd["rank"], v, score, job, n, jd, creator))
         want, made = ((CUSTOM or {}).get("clips", 1) if v.get("custom") else 1), 0  # a normal run makes one clip per video; a link can ask for several
         for rank, score, job, n, jd in sorted(judged, key=lambda x: -x[0]):
             log(f"  best-ranked moment {n} (rank {rank:.1f})")
@@ -502,8 +552,13 @@ def try_videos(vids, st, sf, dry, base_pct, creator=None):
             return 0
         if v.get("custom"):
             log("  none of the moments in this link passed the checks"); continue
-        log("  none of the top moments passed the checks; rejected")
-        st["rejected"].append(v["id"]); sf.write_text(json.dumps(st, indent=1), encoding="utf-8")
+        global NEAR
+        if weak:  # the best of the near-misses is kept: if this run finds nothing better it goes to "Ready to post" for the user to decide
+            best = max(weak, key=lambda x: x[0])
+            if NEAR is None or best[0] > NEAR[0]:
+                NEAR = best
+        log("  none of the top moments passed the checks; rejected for 4 days")
+        reject(st, sf, v["id"])
     return None
 
 
@@ -588,7 +643,7 @@ def _main():
     cfg = json.loads((R / "autopost_config.json").read_text(encoding="utf-8"))
     sf = R / "autopost_state.json"
     st = json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {"used_video_ids": [], "posts": [], "consecutive_failures": 0}
-    st.setdefault("rejected", [])
+    st.setdefault("rejected", []); expire_rejected(st)
     if a.relaxed:
         cfg["quality"] = "relaxed"; cfg["ai_check"] = False  # in memory only: the AI frame check does not veto in this test run
     configure(cfg)
@@ -646,6 +701,12 @@ def _main():
         vids = [v for v in vids if v["id"] == a.only] if a.only else vids
         log(f"  {len(vids)} trending candidates: " + ", ".join(v["channel"] for v in vids))
         code = try_videos(vids, st, sf, a.dry, 35)
+        if code is not None:
+            return code
+    if NEAR and not a.dry:  # nothing passed: the closest moment goes to "Ready to post" (never posted by itself) so the user decides
+        rank, v, score, job, n, jd, creator = NEAR
+        log(f"nothing passed every check: the closest moment (rank {rank:.1f}) goes to Ready to post for your decision")
+        code = try_candidate(v, score, job, n, jd["c"], creator, False, memo=jd, review_only=True)
         if code is not None:
             return code
     progress(100, "Skipped: no strong moment found right now")

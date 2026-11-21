@@ -27,13 +27,13 @@ def valid(d):
         ov, yt, tt = d["on_video"].strip(), d["youtube_title"].strip(), d["tiktok_line"].strip()
     except Exception:
         return None
-    if not (2 <= len(ov.split()) <= 7) or len(ov) > 40 or not (8 <= len(yt) <= 70) or not (8 <= len(tt) <= 90):
+    if not (8 <= len(yt) <= 70) or not (8 <= len(tt) <= 90):
         return None
-    for s in (ov, yt, tt):
+    if not (2 <= len(ov.split()) <= 7) or len(ov) > 40 or re.search(r"[^\x00-\x7F‘’“”]", ov) or BANNED.search(ov) or SWEAR.search(ov):
+        ov = ""  # the on-video text is not shown any more: a bad one no longer throws away a good title and description
+    for s in (yt, tt):
         if BANNED.search(s) or SWEAR.search(s) or re.search(r"https?://|#|@|\*", s):  # '*' = a masked swear such as f***
             return None
-    if re.search(r"[^\x00-\x7F‘’“”]", ov):  # the video font cannot render emoji / odd symbols
-        return None
     return {"on_video": ov, "youtube_title": yt, "tiktok_line": tt}
 
 
