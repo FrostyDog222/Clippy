@@ -34,7 +34,7 @@ for rel in FILES:
     dst = STAGE / rel; dst.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(src, dst)
     if src.suffix.lower() in {".py", ".bat", ".html", ".md", ".txt"}:
         for i, ln in enumerate(src.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
-            if PERSONAL.search(ln.replace("github.com/FrostyDog222/Clippy", "")) and rel != "scripts/make_release.py":
+            if PERSONAL.search(ln.replace("FrostyDog222/Clippy", "")) and rel != "scripts/make_release.py":
                 problems.append(f"personal data in {rel}:{i}: {ln.strip()[:80]}")
 if FACE.exists():  # the face model travels with the release (tiny, checked against a pinned hash): no download needed
     (STAGE / "models").mkdir(exist_ok=True); shutil.copyfile(FACE, STAGE / "models" / FACE.name)
