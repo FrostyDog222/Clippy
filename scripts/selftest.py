@@ -49,6 +49,19 @@ def test_over_limit_ends_on_a_sentence():
     assert r and r["end"] - r["start"] <= 40 and abs(r["end"] - 139.4) < 0.1, r  # the last full sentence that fits, not a cut at the limit
 
 
+def test_webcam_panel_crop():
+    import cut
+    sw, sh = 1920, 1080
+    for box, face in (([0.66, 0.19, 0.34, 0.34], [0.86, 0.25, 0.085, 0.19]),   # corner cam, big box
+                      ([0.02, 0.21, 0.17, 0.17], [0.085, 0.246, 0.049, 0.094]),  # tight cam box around a small face
+                      ([0.0, 0.0, 0.2, 0.5], [0.04, 0.1, 0.1, 0.18])):         # tall box (webcam + chat below)
+        w, h, x, y = cut.panel_crop(box, face, sw, sh)
+        assert abs(w / h - 1080 / 729) < 0.03, (w, h)  # the panel's own shape: no stretching
+        assert 0 <= x and 0 <= y and x + w <= sw and y + h <= sh
+        fx, fy, fw, fh = face[0] * sw, face[1] * sh, face[2] * sw, face[3] * sh
+        assert x <= fx and fx + fw <= x + w and y <= fy - 0.2 * fh and fy + fh <= y + h, (x, y, w, h)  # whole face plus hair room inside the crop
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

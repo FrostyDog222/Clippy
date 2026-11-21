@@ -153,7 +153,37 @@ def webcam_ok(r):
     return True, ""
 
 
-def video_filter(layout, cam, ass, band=None, cam_side='right', src=None, game_x=None, face_expr=None):
+def panel_crop(box, face, sw, sh, ph=int(H * 0.38), zoom=3.4):
+    """The webcam panel of the 'facecam' layout: a crop of the SAME shape as the panel, centred on the face, face about 30% of the panel height (head and
+    hair fit, nothing cut in half), kept inside the detected cam box when it fits there (so chat lines or the game next to the webcam stay out).
+    box / face are fractions of the source frame; returns (w, h, x, y) in source pixels."""
+    A = W / ph
+    bx, by, bw, bh = box[0] * sw, box[1] * sh, box[2] * sw, box[3] * sh
+    m = 0.10  # a little of what lies behind / next to the webcam is fine (the streamer's choice), a squeezed or cut head is not: the box may grow 10% each side
+    bx2, by2 = max(0, bx - m * bw), max(0, by - m * bh)
+    bw, bh = min(sw, bx + bw + m * bw) - bx2, min(sh, by + bh + m * bh) - by2
+    bx, by = bx2, by2
+    fx, fy, fw, fh = face[0] * sw, face[1] * sh, face[2] * sw, face[3] * sh
+    ch = fh * zoom  # the face is about 30% of the panel height: head, shoulders and some room around it, not a close-up
+    cw = ch * A
+    if cw > bw or ch > bh:  # bigger than the cam box: shrink to fit inside it...
+        s = min(bw / cw, bh / ch); cw, ch = cw * s, ch * s
+    if ch < fh * 2.6:  # ...but never so tight that the head is cut: then take a little from outside the box
+        ch = fh * 2.6; cw = ch * A
+    if cw > sw:
+        cw = sw; ch = cw / A
+    if ch > sh:
+        ch = sh; cw = ch * A
+    x0, y0 = fx + fw / 2 - cw / 2, fy + fh / 2 - 0.46 * ch  # the face sits a bit above the middle: room for hair on top
+    lx, hx = (bx, bx + bw - cw) if cw <= bw else (0, sw - cw)
+    ly, hy = (by, by + bh - ch) if ch <= bh else (0, sh - ch)
+    x0 = min(max(x0, lx), max(lx, hx)); y0 = min(max(y0, ly), max(ly, hy))
+    x0 = min(max(x0, 0), sw - cw); y0 = min(max(y0, 0), sh - ch)
+    ev = lambda v: int(v) // 2 * 2
+    return ev(cw), ev(ch), ev(x0), ev(y0)
+
+
+def video_filter(layout, cam, ass, band=None, cam_side='right', src=None, game_x=None, face_expr=None, fc=None):
     """Layout + burned-caption filter graph ending in [vo]. Reused by translate.py."""
     if layout == "fill":
         v = f"[0:v]scale=-2:{H},crop={W}:{H}[v]"
@@ -177,6 +207,10 @@ def video_filter(layout, cam, ass, band=None, cam_side='right', src=None, game_x
             y0, bh, secs = band
             en = f":enable='lte(t,{secs})'" if secs > 0 else ''
             v = v[:-3] + f"[v0];[v0]drawbox=x=0:y={y0}:w=iw:h={bh}:color=white@1:t=fill{en}[v]"
+    elif fc:  # facecam with a known face: a face-centred crop in the panel's own shape
+        ph = int(H * 0.38)
+        v = (f"[0:v]split[a][b];[a]crop={fc[0]}:{fc[1]}:{fc[2]}:{fc[3]},scale={W}:{ph}:flags=lanczos,setsar=1[cam];"
+             f"[b]scale=-2:{H - ph},crop={W}:{H - ph}[game];[cam][game]vstack[v]")
     else:
         x, y, w, h = map(float, cam.split(":"))
         # as before: webcam zoomed on top, the whole game centred below. The webcam stays visible in the corner of the game part (no blur patch).
@@ -247,7 +281,7 @@ def main():
     words = load_json(d / "transcript.json")
     out = d / "edits"; out.mkdir(exist_ok=True)
     layout, cam, side = a.layout, a.cam, 'right'
-    face_expr = None
+    face_expr, face_frac = None, None
     if layout in ('react', 'facecam') and cam == 'auto':
         from facecam import find_cam
         r = find_cam(c['source'], s0, e0)
@@ -284,6 +318,7 @@ def main():
                 bw, bh = min(1.0, bx[2] * 2.6), min(1.0, bx[3] * 2.2)
                 bx = [min(max(0.0, cx - bw / 2), 1 - bw), min(max(0.0, cy - bh / 2), 1 - bh), bw, bh]
             cam = ':'.join(f'{v:.4f}' for v in bx)
+            face_frac = r.get('face')
             side = 'left' if r['box'][0] + r['box'][2] / 2 < 0.5 else 'right'
             print(f"facecam: {r.get('mode')} box {cam} ({r.get('summary', '')})")
         else:
@@ -313,7 +348,16 @@ def main():
         vs = [x for x in ffprobe(c['source'])['streams'] if x.get('codec_type') == 'video'][0]
         src = (int(vs['width']), int(vs['height']))
         gx = game_offset(c['source'], s0, e0, src, [float(t) for t in cam.split(':')])
-    v = video_filter(layout, cam, ass, band=band, cam_side=side, src=src, game_x=gx, face_expr=face_expr)
+    fc = None
+    if layout == 'facecam' and face_frac:
+        try:
+            from common import ffprobe as _fp
+            _vs = [x for x in _fp(c['source'])['streams'] if x.get('codec_type') == 'video'][0]
+            fc = panel_crop([float(t) for t in cam.split(':')], face_frac, int(_vs['width']), int(_vs['height']), zoom=3.4 if r.get('mode') == 'cam' else 2.9)  # no clean cam border found: a bit tighter so less of the game around a small corner cam shows
+            print(f"facecam: face-centred panel crop {fc}")
+        except Exception as ex:
+            print(f"facecam: face-centred crop not possible ({str(ex)[:60]}), using the cam box")
+    v = video_filter(layout, cam, ass, band=band, cam_side=side, src=src, game_x=gx, face_expr=face_expr, fc=fc)
     mp4 = out / f"clip_{a.pick}.mp4"
     dur = max(1.0, e0 - s0)  # a short fade-out (picture + sound) so the clip ends on purpose instead of looking like a random cut
     vmap = "[vo]"
