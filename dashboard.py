@@ -1010,6 +1010,7 @@ NOTIFY_PS = ("$ErrorActionPreference='Stop';"
              "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null;"
              "$t=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
              "$n=$t.GetElementsByTagName('text');$n.Item(0).AppendChild($t.CreateTextNode($env:CLIPPY_NT)) | Out-Null;$n.Item(1).AppendChild($t.CreateTextNode($env:CLIPPY_NM)) | Out-Null;"
+             "$t.DocumentElement.SetAttribute('activationType','protocol');$t.DocumentElement.SetAttribute('launch',$env:CLIPPY_URL);"  # a click opens the dashboard
              "$id='{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe';"
              "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($id).Show([Windows.UI.Notifications.ToastNotification]::new($t))")
 _NOTIFIED = {"ts": None}
@@ -1021,7 +1022,7 @@ def notify(title, msg):
         if not read_cfg().get("notify"):
             return
         subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", NOTIFY_PS], creationflags=NOWIN,
-                         env={**os.environ, "CLIPPY_NT": str(title)[:60], "CLIPPY_NM": str(msg)[:180]}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                         env={**os.environ, "CLIPPY_NT": str(title)[:60], "CLIPPY_NM": str(msg)[:180], "CLIPPY_URL": f"http://127.0.0.1:{PORT}"}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
 
