@@ -216,7 +216,7 @@ def main():
                             cnt[norm(p.get("channel") or "")] = cnt.get(norm(p.get("channel") or ""), 0) + 1
                     for k_, n_ in made_by.items():
                         cnt[k_] = cnt.get(k_, 0) + n_
-                    maxc = int(cfg.get("max_per_creator_per_day", 1))
+                    maxc = 10 ** 6 if by == "manual" else int(cfg.get("max_per_creator_per_day", 1))  # the per-streamer daily limit is an Autopilot rule: a live run you started yourself ignores it
                     queue.sort(key=lambda q: (-q.get("rel", 1.0), -q["rate"]))  # relative to each stream's own usual spikes, so a small stream's real peak is not buried by a big stream's normal chat
                     pick = next((q for q in queue if cnt.get(norm(q["s"]["channel"]), 0) < maxc), None)
                     if pick:

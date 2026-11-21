@@ -828,6 +828,7 @@ def main():
 
 def _main():
     ap = argparse.ArgumentParser(); ap.add_argument("--force", action="store_true"); ap.add_argument("--dry", action="store_true")
+    ap.add_argument("--manual", action="store_true", help="started by you (Run now): none of the Autopilot limits apply, not even the per-streamer daily limit")
     ap.add_argument("--trending-only", action="store_true", help="test: ignore the streamer list and use only trending sources")
     ap.add_argument("--creator", help="test: look only at this one streamer (no trending, the saved list is not changed)")
     ap.add_argument("--only", help="test: in the trending step look only at this one video / clip id")
@@ -889,7 +890,7 @@ def _main():
     skip_ch = {d for d in done_today if d and done_today.count(d) >= maxc}
     if cfg.get("creator_mode") == "random":
         random.shuffle(creators)
-    if not a.creator:  # the --creator test flag ignores the daily per-creator limit
+    if not a.creator and not a.manual:  # the --creator test flag and a manual run ignore the daily per-creator limit (it is an Autopilot rule)
         creators = [c for c in creators if not any(norm(c) in d or d in norm(c) for d in skip_ch)]
     skip_ids = set(st["used_video_ids"]) | set(st["rejected"]) | review_ids()
     # 0) Twitch first: clips the streamers' own audiences made (already picked by viewers), from every streamer on the list plus trending, most viewed first

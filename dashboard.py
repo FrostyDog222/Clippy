@@ -112,11 +112,11 @@ def running():
     return bool(p) and 0 < p["pct"] < 100 and (dt.datetime.now() - dt.datetime.fromisoformat(p["ts"])).total_seconds() < 45 * 60 and not run_stale()
 
 
-def run_now(force=False, clips=1):
+def run_now(force=False, clips=1, manual=False):
     """Clippy's own pipeline (scripts/autorun.py, no Claude). force=True is the manual "Run now" button (ignores the daily limit / window / gap);
     the autopilot calls it without force so tick.py decides. (This used to start run_slot.bat, the old Claude-driven mode.)"""
     set_prog(1, "Starting")
-    subprocess.Popen([BGPY, "scripts/autorun.py", *(["--force"] if force else []), "--clips", str(max(1, min(10, int(clips))))], cwd=R, creationflags=NOWIN | DETACHED,
+    subprocess.Popen([BGPY, "scripts/autorun.py", *(["--force"] if force else []), *(["--manual"] if manual else []), "--clips", str(max(1, min(10, int(clips))))], cwd=R, creationflags=NOWIN | DETACHED,
                      stdout=open(R / "autorun.log", "a", encoding="utf-8"), stderr=subprocess.STDOUT)
 
 
@@ -1250,7 +1250,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.send(409, "Live watching is running. Press Stop now first, or pick Live streams for manual runs.", "text/plain")
             if blocked_msg(read_cfg()):
                 return self.send(409, blocked_msg(read_cfg()), "text/plain")
-            run_now(True, int(read_cfg().get("clips_per_run", 1) or 1))  # the manual button: run now even outside the schedule, with the "clips this run" number
+            run_now(True, int(read_cfg().get("clips_per_run", 1) or 1), manual=True)  # the manual button: run now even outside the schedule, with the "clips this run" number
         elif self.path in ("/api/signin", "/api/signcheck"):
             err = start_signin() if self.path == "/api/signin" else start_check()
             if err:
