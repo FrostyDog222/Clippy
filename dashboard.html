@@ -403,7 +403,7 @@ if(stale){$('pm').dataset.state='fail';bar.style.width='100%';bar.style.backgrou
 const age=(Date.now()-new Date(p.ts))/60000,fail=p.pct<0,done=p.pct>=100;bar.style.width=(fail?100:Math.min(100,p.pct))+'%';bar.style.background=fail?'var(--bad)':'var(--acc)';
 $('pm').dataset.state=fail?'fail':done?'done':'busy';$('pm').textContent=(fail?'Stopped or failed: ':done?'Done: ':p.pct+'%  ')+p.msg+(run&&age>20?'  (no update for '+Math.round(age)+' min, may be stalled)':'')}
 async function load(force){let d;try{d=await (await fetch('/api/state')).json()}catch(e){$('status').textContent='Dashboard closed';return}
-Object.assign(LANGSET,d.all_languages||{});const first=!srv;srv=d.config;if(srv.display_name==null)srv.display_name='';setWelcome();updShow(d.update);if(first||force||!dirty()){draft=JSON.parse(JSON.stringify(srv));fill()}chg();
+Object.assign(LANGSET,d.all_languages||{});const first=!srv;srv=d.config;if(srv.display_name==null)srv.display_name='';if(srv.blocked_streamers==null)srv.blocked_streamers='';setWelcome();updShow(d.update);if(first||force||!dirty()){draft=JSON.parse(JSON.stringify(srv));fill()}chg();
 const p=d.progress,run=p&&p.pct>0&&p.pct<100&&(Date.now()-new Date(p.ts))<45*60000&&!d.run_stale;setRunLog(d.runlog);setTiming(d.run_timing);if(d.run_suspended)$('rt').textContent='Paused: the run is frozen exactly where it was and continues when you press Resume.';
 $('dot').className='dot '+(d.paused?'bad':run?'run':srv.autopilot?'on':'');
 $('status').textContent=d.paused?'Paused':d.run_stale?'Last run stopped':run?'Posting now':srv.autopilot?'Autopilot on, waiting':'Idle';setRunLbl(d.paused?'Paused':d.run_stale?'Stopped':run?'Running...':'Idle',run&&!d.paused);
