@@ -385,8 +385,9 @@ def start_check():
 MAX_WAITING = 8  # prepare-only mode: stop preparing new clips while this many wait in "Ready to post"
 
 
-def waiting_clips():
-    """Clips in Ready to post that were not posted yet: (stem, creation time)."""
+def waiting_clips(include_reviewed=False):
+    """Clips in Ready to post that WAIT FOR YOU: not posted, not scheduled and not looked at yet (a 👍, 😐 or 👎 means you have seen it): (stem, creation time).
+    include_reviewed=True: every clip that is not posted yet (what counts toward the day's quota of prepared clips)."""
     out = []
     for f in (REVIEW.glob("*__clip_*.json") if REVIEW.exists() else []):
         if f.name.endswith(".posted.json") or not f.with_suffix(".mp4").exists() or not STEM.match(f.stem):
@@ -395,6 +396,10 @@ def waiting_clips():
         try:
             if sf.exists() and any(json.loads(sf.read_text(encoding="utf-8")).values()):
                 continue
+            if not include_reviewed:
+                d = json.loads(f.read_text(encoding="utf-8"))
+                if d.get("rating") in (1, -1) or d.get("reviewed") or d.get("scheduled"):
+                    continue
             out.append((f.stem, dt.datetime.fromtimestamp(int(f.stem.split("__")[0]))))
         except Exception:
             continue
@@ -407,7 +412,7 @@ def sched_posts(c):
     posts = read_posts()
     if c.get("auto_post"):
         return posts
-    return posts + [{"date": t.strftime("%Y-%m-%d"), "ts": t.isoformat(timespec="seconds")} for _, t in waiting_clips()]
+    return posts + [{"date": t.strftime("%Y-%m-%d"), "ts": t.isoformat(timespec="seconds")} for _, t in waiting_clips(include_reviewed=True)]
 
 
 def start_live(by, target):
@@ -833,7 +838,7 @@ def review_items():
             et, ed, eg = split_meta(meta)
             out.append({"id": f.stem, "title": meta.get("yt_title", ""), "desc": meta.get("yt_description", ""), "caption": meta.get("tiktok_caption", ""),
                         "edit_title": et, "edit_desc": ed, "edit_tags": " ".join(eg), "edit_tiktok": meta.get("tiktok_custom", ""), "edited": bool(meta.get("edited")),
-                        "seconds": d.get("seconds"), "layout": d.get("layout"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "reason": d.get("reason"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
+                        "seconds": d.get("seconds"), "layout": d.get("layout"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "reviewed": bool(d.get("reviewed") or d.get("rating") in (1, -1)), "reason": d.get("reason"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
                         "posted": json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {}, "status": REVIEW_STATUS.get(f.stem)})
         except Exception:
             continue
@@ -1383,6 +1388,7 @@ class H(http.server.BaseHTTPRequestHandler):
             try:
                 body = json.loads(self.rfile.read(n)); stem = body["id"]; assert STEM.match(stem) and body["rating"] in (-1, 0, 1)
                 cf = REVIEW / (stem + ".json"); d = json.loads(cf.read_text(encoding="utf-8")); d["rating"] = body["rating"]
+                d["reviewed"] = bool(body["rating"] in (1, -1) or body.get("neutral"))  # 👍 / 😐 / 👎 = "I looked at it": it no longer counts as waiting for you
                 d.pop("reason", None)
                 if body["rating"] == -1 and body.get("reason") in WHY:
                     d["reason"] = body["reason"]

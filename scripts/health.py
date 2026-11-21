@@ -36,7 +36,7 @@ def checks(cfg, signin, update, free_gb, waiting, have, yt_limit_until=None, max
             "Very low: runs will fail." if free_gb < 3 else "Getting low: use Clean up now in Settings." if free_gb < 10 else "",
             {"label": "Clean up", "action": "settings:keep_clips_days"} if free_gb < 10 else None)
     if waiting >= max_waiting:
-        add("waiting", "info", f"{waiting} clips are waiting for you", "Autopilot stops preparing new clips while this many wait. Post, schedule or remove some.")
+        add("waiting", "info", f"{waiting} clips are waiting for you", "Autopilot stops preparing new clips while this many wait. Look at them: rate each one (👍, 😐 or 👎), then post, schedule or remove it.")
     if update and update.get("available"):
         add("update", "info", "A new version of Clippy is available", "", {"label": "Update now", "action": "update"})
     if yt_limit_until:

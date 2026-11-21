@@ -639,6 +639,21 @@ def test_manual_and_automation_choose_their_source_separately():
         d.CFG = keep
 
 
+def test_clips_you_looked_at_do_not_count_as_waiting():
+    import sys, json, tempfile, time as tm
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    keep = d.REVIEW; d.REVIEW = Path(tempfile.mkdtemp())
+    try:
+        now = int(tm.time())
+        for i, extra in enumerate([{}, {"rating": 1}, {"rating": -1}, {"rating": 0, "reviewed": True}, {"scheduled": {"at": "2099-01-01T10:00", "mode": "private"}}]):
+            st = f"{now + i}__clip_1"; (d.REVIEW / f"{st}.mp4").write_bytes(b"x"); (d.REVIEW / f"{st}.json").write_text(json.dumps(extra))
+        assert len(d.waiting_clips()) == 1                       # only the clip you have not looked at waits for you
+        assert len(d.waiting_clips(include_reviewed=True)) == 5   # the day's quota of prepared clips still counts them all
+    finally:
+        d.REVIEW = keep
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""
