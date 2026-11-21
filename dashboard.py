@@ -275,6 +275,50 @@ def checks():
 
 SIGNIN = R / "signin_status.json"
 VPY = str(R / ".venv" / "Scripts" / "python.exe")
+PORT = int(os.environ.get("CLIPPY_PORT", "8765"))  # (only tests use another port)
+BOOT = str(int(time.time() * 1000))  # identifies THIS running dashboard: the page reloads itself when it sees a different one
+SERVER = None
+
+
+def code_sig():
+    """A fingerprint of the program files the running dashboard loaded at start (dashboard.py, tick.py, scripts/*.py): when it differs from the one taken at start, the files changed
+    (an update, or a new version) and the dashboard should be restarted to use them."""
+    try:
+        files = [R / "dashboard.py", R / "tick.py", *sorted((R / "scripts").glob("*.py"))]
+        return "|".join(f"{f.name}:{int(f.stat().st_mtime)}:{f.stat().st_size}" for f in files if f.exists())
+    except Exception:
+        return ""
+
+
+START_SIG = code_sig()
+
+
+def restart_wanted():
+    return code_sig() != START_SIG
+
+
+def restart_self():
+    """Hard restart: a tiny helper process (no window, survives this one) waits until this dashboard has let go of the port, then starts a fresh dashboard; then this one exits.
+    Runs that are already going (their own processes) and the saved settings are not touched."""
+    lines = ["import socket, subprocess, time",
+             "time.sleep(1.0)",
+             "for _ in range(60):",
+             "    s = socket.socket()",
+             "    try:",
+             f"        s.bind(('127.0.0.1', {PORT})); s.close(); break",
+             "    except OSError:",
+             "        s.close(); time.sleep(0.5)",
+             f"subprocess.Popen([{BGPY!r}, 'dashboard.py'], cwd={str(R)!r}, creationflags=0x08000000 | 0x00000008, close_fds=True)"]
+    helper = chr(10).join(lines)
+    subprocess.Popen([BGPY, "-c", helper], cwd=R, creationflags=NOWIN | DETACHED, close_fds=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(0.5)
+    try:
+        if SERVER:
+            SERVER.shutdown()
+    finally:
+        os._exit(0)
+
+
 BGPY = str(R / ".venv" / "Scripts" / "pythonw.exe")  # every background launch uses the no-console Python: a visible console window (that closing would kill the run) can never appear
 _busy = {"what": None}
 
@@ -785,7 +829,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                               "today": [p for p in posts if p.get("date") == today and not p.get("deleted")], "log": log,
                                               "progress": progress(), "signin": signin_state(), "jobs_mb": cleanup.jobs_mb(), "all_languages": textutil.LANGS, "perf": perf(), "ai_keys": {p["id"]: secretstore.exists(f"key_{p['id']}") for p in c.get("ai_profiles", [])}, "blocked": blocked_msg(c), "live": live_status(),
                                               "review": review_items(), "run_stale": run_stale(), "run_timing": run_timing(), "run_suspended": run_suspended(),
-                                              "update": update_info(), "learn": learn_info(),
+                                              "update": update_info(), "learn": learn_info(), "boot": BOOT, "restart_needed": restart_wanted(), "html": int((R / "dashboard.html").stat().st_mtime),
                                               "runlog": (R / "autorun.log").read_text(encoding="utf-8", errors="replace")[-8000:] if (R / "autorun.log").exists() else "",
                                               "why": "Next run is due now" if ok else "Waiting: " + why,
                                               "mode": tick.decide({**c, "posts_per_day": 99, "window_start": "00:00", "window_end": "23:59", "min_gap_minutes": 0}, [], dt.datetime.now())[2]}))
@@ -795,7 +839,7 @@ class H(http.server.BaseHTTPRequestHandler):
         if self.headers.get("Host", "").split(":")[0] not in ("127.0.0.1", "localhost"):  # DNS-rebinding guard
             return self.send(403, "bad host", "text/plain")
         org = self.headers.get("Origin")  # cross-site request guard: a web page you happen to have open must not be able to POST to this local dashboard
-        if org and org not in ("http://127.0.0.1:8765", "http://localhost:8765"):
+        if org and org not in (f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"):
             return self.send(403, "bad origin", "text/plain")
         n = int(self.headers.get("Content-Length", 0))
         if self.path == "/api/pause":  # a real pause: freezes the running run (Resume unfreezes it); also holds back new runs
@@ -889,6 +933,12 @@ class H(http.server.BaseHTTPRequestHandler):
             cleanup.run()
         elif self.path == "/api/stop":
             stop_runs()
+        elif self.path == "/api/restart":  # hard restart of the dashboard (the new code is loaded); refused while an upload is running
+            if run_alive() and ((R / "post.lock").exists() or any((x or {}).get("state") == "posting" for x in REVIEW_STATUS.values())):
+                return self.send(409, "An upload is running: restart when it has finished", "text/plain")
+            self.send(200, "{}")
+            threading.Thread(target=restart_self, daemon=True).start()
+            return
         elif self.path == "/api/quit":
             self.send(200, "{}"); threading.Thread(target=self.server.shutdown).start(); return
         elif self.path == "/api/review/edit":
@@ -1014,10 +1064,18 @@ if __name__ == "__main__":
         secretstore.migrate_all()  # any old plain-text key becomes an encrypted file
     except Exception:
         pass
-    threading.Thread(target=ytdlp_loop, daemon=True).start()
-    threading.Thread(target=update_loop, daemon=True).start()
-    threading.Thread(target=autopilot_loop, daemon=True).start()
-    threading.Thread(target=live_loop, daemon=True).start()
-    threading.Thread(target=stats_loop, daemon=True).start()
-    print("Clippy dashboard on http://127.0.0.1:8765  (Ctrl+C to stop)")
-    http.server.ThreadingHTTPServer(("127.0.0.1", 8765), H).serve_forever()
+    if not os.environ.get("CLIPPY_NOBG"):  # (tests start the server without the background loops)
+        threading.Thread(target=ytdlp_loop, daemon=True).start()
+        threading.Thread(target=update_loop, daemon=True).start()
+        threading.Thread(target=autopilot_loop, daemon=True).start()
+        threading.Thread(target=live_loop, daemon=True).start()
+        threading.Thread(target=stats_loop, daemon=True).start()
+    print(f"Clippy dashboard on http://127.0.0.1:{PORT}  (Ctrl+C to stop)")
+    for _ in range(40):  # right after a restart the old dashboard may still be letting go of the port
+        try:
+            SERVER = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), H); break
+        except OSError:
+            time.sleep(0.5)
+    else:
+        sys.exit("the dashboard port is in use")
+    SERVER.serve_forever()

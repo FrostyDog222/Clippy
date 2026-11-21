@@ -82,11 +82,13 @@ def test_streamer_twitch_clips_filter():
 
 def test_judge_rules():
     import json, tempfile
-    keep = (ai_check.refine_window, ai_check.analyze, autorun.log, autorun.CFG, autorun.LIMITS, autorun.ORIGIN)
+    keep = (ai_check.refine_window, ai_check.analyze, autorun.log, autorun.CFG, autorun.LIMITS, autorun.ORIGIN, learn.W_FILE, dict(learn._model))
+    learn.W_FILE = Path(tempfile.mkdtemp()) / "none.json"; learn._model.update(t=0.0, m=None)  # the rules are tested without anything this user's ratings taught (a learned model would add its own small nudge)
     try:
         _judge_rules(json, tempfile)
     finally:
-        ai_check.refine_window, ai_check.analyze, autorun.log, autorun.CFG, autorun.LIMITS, autorun.ORIGIN = keep
+        ai_check.refine_window, ai_check.analyze, autorun.log, autorun.CFG, autorun.LIMITS, autorun.ORIGIN, learn.W_FILE = keep[:7]
+        learn._model.update(keep[7])
 
 
 def _judge_rules(json, tempfile):
@@ -269,6 +271,27 @@ def test_trim_then_post_uses_the_new_video_and_texts():
         assert "trim" not in json.loads((d.REVIEW / f"{stem}.json").read_text())
     finally:
         srv.shutdown(); d.R, d.REVIEW, d.subprocess.run, d.read_cfg = keep
+
+
+def test_restart_is_wanted_only_when_program_files_changed():
+    import sys, tempfile
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    tmp = Path(tempfile.mkdtemp()); (tmp / "scripts").mkdir()
+    for f in ("dashboard.py", "tick.py", "scripts/a.py"):
+        (tmp / f).write_text("x = 1")
+    keep = (d.R, d.START_SIG); d.R = tmp
+    try:
+        d.START_SIG = d.code_sig()
+        assert not d.restart_wanted()  # nothing changed since this dashboard started
+        (tmp / "settings.json").write_text("{}"); (tmp / "review").mkdir()  # settings, clips, ratings are not program files: no restart needed
+        assert not d.restart_wanted()
+        (tmp / "scripts" / "a.py").write_text("x = 2  # an update")
+        assert d.restart_wanted()  # a program file changed: the running dashboard is out of date
+        (tmp / "scripts" / "new_module.py").write_text("y = 1")
+        assert d.restart_wanted()
+    finally:
+        d.R, d.START_SIG = keep
 
 
 def test_titles_survive_bad_on_video_text():
