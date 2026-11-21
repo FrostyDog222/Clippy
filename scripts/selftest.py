@@ -862,6 +862,22 @@ def test_dislike_reasons_can_be_several_and_custom():
     assert not learn.off_moment({"reasons": ["crop", "boring"]}) and not learn.off_moment({"reasons": ["my own words"]}) and not learn.off_moment({})
 
 
+def test_english_captions_are_byte_identical_and_other_scripts_get_fonts():
+    import sys, hashlib
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import cut
+    words = [{"w": w, "s": 0.2 * i, "e": 0.2 * i + 0.15} for i, w in enumerate("Oh my god did you see that, he just drove the car off the bridge! What the hell is going on here, nobody expected that at all.".split())]
+    out = []
+    for caps in ("word", "bubble"):
+        for title in (None, ("outline", "Nobody saw that coming", 700, 0)):
+            out.append(cut.build_ass(words, 0.0, 6.0, "Hook line here", 1460, title=title, caps=caps, profanity=False))
+    blob = (chr(10) + "=====" + chr(10)).join(out)
+    assert hashlib.sha256(blob.encode("utf-8")).hexdigest() == "0c829dd3347780be5b8de0943cd032729c80d7e8e7cf81568430b3462547b283", "English captions changed"
+    assert cut._fonts("hello world") == "hello world" and cut._rtl([{"w": "مرحبا"}, {"w": "بك"}]) and not cut._rtl([{"w": "hello"}, {"w": "بك"}])
+    ar = [{"w": "ما", "s": 0, "e": 0.3}, {"w": "هذا", "s": 0.4, "e": 0.7}]
+    assert cut.build_ass(ar, 0.0, 2.0, "", 1460, caps="word", lang="ar").count("Dialogue") >= 2
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""
