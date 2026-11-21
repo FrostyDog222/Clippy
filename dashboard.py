@@ -277,6 +277,12 @@ SIGNIN = R / "signin_status.json"
 VPY = str(R / ".venv" / "Scripts" / "python.exe")
 PORT = int(os.environ.get("CLIPPY_PORT", "8765"))  # (only tests use another port)
 BOOT = str(int(time.time() * 1000))  # identifies THIS running dashboard: the page reloads itself when it sees a different one
+class OneServer(http.server.ThreadingHTTPServer):
+    """Only ONE dashboard per port: by default Python lets a second copy share the port on Windows, which ran two schedulers at once (a clip could post twice).
+    Without port sharing a second copy cannot start ('the dashboard port is in use') and ends."""
+    allow_reuse_address = False
+
+
 SERVER = None
 
 
@@ -1353,9 +1359,10 @@ if __name__ == "__main__":
     print(f"Clippy dashboard on http://127.0.0.1:{PORT}  (Ctrl+C to stop)")
     for _ in range(40):  # right after a restart the old dashboard may still be letting go of the port
         try:
-            SERVER = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), H); break
+            SERVER = OneServer(("127.0.0.1", PORT), H); break
         except OSError:
             time.sleep(0.5)
     else:
         sys.exit("the dashboard port is in use")
     SERVER.serve_forever()
+    os._exit(0)  # after /api/quit the whole program ends (no leftover process)
