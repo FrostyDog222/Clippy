@@ -943,6 +943,9 @@ def test_old_clips_leave_ready_to_post_by_themselves():
         d.review_expire()
         assert not (tmp / (old + ".mp4")).exists() and not (tmp / (old + ".raw")).exists() and not (tmp / (old + ".json")).exists()   # the old one and its raw copy are gone
         assert (tmp / (new + ".mp4")).exists() and (tmp / (kept + ".mp4")).exists()
+        assert json.loads((tmp / (new + ".json")).read_text())["expire_days"] == 3          # stamped once with the setting of that day
+        d.read_cfg = lambda: {"keep_clips_days": 1}; d.review_expire()                      # the setting changes later: the clip keeps its own period
+        assert (tmp / (new + ".mp4")).exists() and d.review_expiry(json.loads((tmp / (new + ".json")).read_text()), new, 1) == int(new.split("__")[0]) + 3 * 86400
     finally:
         d.REVIEW, d.read_cfg = keep, kc
 

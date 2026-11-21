@@ -730,6 +730,7 @@ WHY = ("boring", "notfunny", "noaction", "slow", "nocontext", "offtopic", "nudit
 def review_expiry(d, stem, days):
     """When this clip leaves Ready to post by itself: made-time + 'Keep finished clips for' days (epoch seconds), or None (0 days = never; a clip with a coming scheduled post is kept)."""
     try:
+        days = float(d.get("expire_days", days))  # the period that was set when the clip was made (older clips get it stamped on first sight)
         if days <= 0 or d.get("keep"):  # 'Keep' on a clip (or a group) stops the automatic removal
             return None
         sc = d.get("scheduled")
@@ -746,7 +747,7 @@ def review_expire():
         days = float(read_cfg().get("keep_clips_days", 3))
     except Exception:
         return
-    if days <= 0 or not REVIEW.exists() or (R / "post.lock").exists():
+    if not REVIEW.exists() or (R / "post.lock").exists():
         return
     for f in list(REVIEW.glob("*__clip_*.json")):
         if f.name.endswith(".posted.json") or not STEM.match(f.stem):
@@ -755,6 +756,8 @@ def review_expire():
             if (REVIEW_STATUS.get(f.stem) or {}).get("state") == "posting":
                 continue
             d = json.loads(f.read_text(encoding="utf-8"))
+            if "expire_days" not in d:  # a clip from before this existed: it gets today's setting once, and keeps it
+                d["expire_days"] = days; f.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
             t = review_expiry(d, f.stem, days)
             if t and time.time() > t:
                 review_remove(f.stem, auto=True)

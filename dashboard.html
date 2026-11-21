@@ -232,7 +232,7 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:p
     <div class="card"><h2>Storage</h2>
   <div>Temporary videos on disk: <b id="jmb">-</b></div>
   <div class="sw" style="margin-top:6px"><div><div>Delete source videos once their clips are cut</div><small style="color:var(--mut)">Frees hundreds of MB per run. Finished clips are kept for the days below.</small></div><button class="tg" id="cs" onclick="setCS()"></button></div>
-  <label class="f" style="margin-top:6px"><span>Keep finished clips for (also clears Ready to post; 0 = never clear it)</span><div class="unit"><input type="number" id="keep_clips_days" min="0"><em>days</em></div></label>
+  <label class="f" style="margin-top:6px"><span>Keep finished clips for (also clears Ready to post, for clips made from now on; 0 = never)</span><div class="unit"><input type="number" id="keep_clips_days" min="0"><em>days</em></div></label>
   <div class="btns"><button class="btn" onclick="post('/api/cleanup')">Clean up now</button></div>
 </div>
     <div class="card"><h2>Quality check</h2>
