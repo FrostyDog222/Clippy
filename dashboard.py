@@ -583,7 +583,33 @@ def log_rating(stem, d, rating, removed=False):
     """One line in ratings.jsonl (local only): the clip's rating (+1 stood out good, -1 stood out bad, 0 meh) with the signals behind it. The log outlives the clip."""
     with open(R / "ratings.jsonl", "a", encoding="utf-8") as fh:
         fh.write(json.dumps({"id": stem, "rating": rating, "ts": dt.datetime.now().isoformat(timespec="seconds"), "rank": d.get("rank"), "features": d.get("features"),
-                             "seconds": d.get("seconds"), "creator": d.get("creator"), **({"removed": True} if removed else {})}, ensure_ascii=False) + chr(10))
+                             "seconds": d.get("seconds"), "creator": d.get("source_channel") or d.get("creator"), **({"removed": True} if removed else {})}, ensure_ascii=False) + chr(10))
+
+
+_LEARN = {"t": 0.0, "v": None}
+
+
+def learn_refit():
+    """Learn from the ratings again, in the background (right after a 👍 / 👎 / removal), so the next run already uses it."""
+    def go():
+        try:
+            import learn
+            learn.fit(); _LEARN["t"] = 0.0
+        except Exception:
+            pass
+    threading.Thread(target=go, daemon=True).start()
+
+
+def learn_info():
+    """What Clippy learned (plain words), cached for 20 s: the dashboard asks every few seconds."""
+    if _LEARN["v"] is None or time.time() - _LEARN["t"] > 20:
+        try:
+            import learn
+            _LEARN["v"] = learn.summary()
+        except Exception:
+            _LEARN["v"] = None
+        _LEARN["t"] = time.time()
+    return _LEARN["v"]
 
 
 def review_items():
@@ -695,7 +721,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                               "today": [p for p in posts if p.get("date") == today and not p.get("deleted")], "log": log,
                                               "progress": progress(), "signin": signin_state(), "jobs_mb": cleanup.jobs_mb(), "all_languages": textutil.LANGS, "perf": perf(), "ai_keys": {p["id"]: secretstore.exists(f"key_{p['id']}") for p in c.get("ai_profiles", [])}, "blocked": blocked_msg(c), "live": live_status(),
                                               "review": review_items(), "run_stale": run_stale(), "run_timing": run_timing(), "run_suspended": run_suspended(),
-                                              "update": update_info(),
+                                              "update": update_info(), "learn": learn_info(),
                                               "runlog": (R / "autorun.log").read_text(encoding="utf-8", errors="replace")[-8000:] if (R / "autorun.log").exists() else "",
                                               "why": "Next run is due now" if ok else "Waiting: " + why,
                                               "mode": tick.decide({**c, "posts_per_day": 99, "window_start": "00:00", "window_end": "23:59", "min_gap_minutes": 0}, [], dt.datetime.now())[2]}))
@@ -732,6 +758,9 @@ class H(http.server.BaseHTTPRequestHandler):
                 run_custom(b.get("url", ""), b.get("clips", 1), b.get("start"), b.get("length"), bool(b.get("relaxed")))
             except (ValueError, TypeError) as e:
                 return self.send(400, str(e), "text/plain")
+        elif self.path == "/api/learn/reset":  # start fresh: the learned model goes, the ratings log is set aside (renamed)
+            import learn
+            learn.reset(); _LEARN["v"] = None
         elif self.path == "/api/autopost":  # Auto-Post on/off right away (ON: finished clips are posted by Clippy; OFF: they wait in Ready to post)
             c = read_cfg(); c["auto_post"] = not c.get("auto_post", False); save_cfg(c)
         elif self.path == "/api/autopilot":
@@ -814,7 +843,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 body = json.loads(self.rfile.read(n)); stem = body["id"]; assert STEM.match(stem) and body["rating"] in (-1, 0, 1)
                 cf = REVIEW / (stem + ".json"); d = json.loads(cf.read_text(encoding="utf-8")); d["rating"] = body["rating"]
                 cf.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
-                log_rating(stem, d, body["rating"])
+                log_rating(stem, d, body["rating"]); learn_refit()
             except Exception:
                 return self.send(400, "bad rating", "text/plain")
         elif self.path in ("/api/review/post", "/api/review/remove"):
@@ -835,7 +864,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     d = json.loads(cf.read_text(encoding="utf-8")) if cf.exists() else {}
                     posted = pf.exists() and any(json.loads(pf.read_text(encoding="utf-8")).values())
                     if d.get("features") and not d.get("rating") and not posted:
-                        log_rating(stem, d, 0, removed=True)
+                        log_rating(stem, d, 0, removed=True); learn_refit()
                 except Exception:
                     pass
                 (REVIEW / (stem + ".json")).unlink(missing_ok=True)  # the info file first: the clip leaves the list at once, even if the video is still locked

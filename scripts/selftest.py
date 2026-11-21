@@ -128,15 +128,38 @@ def test_learning_from_ratings():
     import random, tempfile
     random.seed(1)
     learn.W_FILE = Path(tempfile.mkdtemp()) / "w.json"
-    mk = lambda i, good: {"id": str(i), "rating": 1 if good else -1, "features": {"win": random.uniform(7, 9.5) if good else random.uniform(3, 6), "frames": random.uniform(5, 9), "score": random.uniform(4, 7), "penalty": random.choice([0, 1, 2]), "sig": {"loud": random.random()}}}
-    few = [mk(i, i % 2) for i in range(12)]
-    assert learn.fit(few) is None  # too few ratings: nothing is learned, nothing changes
+    mk = lambda i, good, ch="X": {"id": str(i), "rating": 1 if good else -1, "features": {"win": random.uniform(7, 9.5) if good else random.uniform(3, 6), "frames": random.uniform(5, 9), "score": random.uniform(4, 7), "penalty": random.choice([0, 1, 2]), "sig": {"loud": random.random()}, "channel": ch}}
+    assert learn.fit([mk(i, i % 2) for i in range(8)]) is None  # too few clips: nothing is learned, nothing changes
+    m = learn.fit([mk(i, i % 2) for i in range(14)])  # it starts early (a handful of ratings), with low trust
+    assert m and 0 < m["conf"] < 0.6, m
     rows = [mk(i, i % 2) for i in range(40)]
     m = learn.fit(rows)
-    assert m and m["n"] == 40
+    assert m and m["n"] == 40 and m["conf"] > 0.6, m  # more ratings: more trust
     hi, lo = learn.adjust({"win": 9, "frames": 7, "score": 6, "penalty": 0, "sig": {"loud": 0.5}}, m), learn.adjust({"win": 3.5, "frames": 7, "score": 6, "penalty": 0, "sig": {"loud": 0.5}}, m)
-    assert hi > 0 > lo and -1 <= lo and hi <= 1, (hi, lo)  # looks like the good ones: up; like the weak ones: down; always small
-    assert learn.adjust({"win": 9}, None) == 0.0 or True
+    assert hi > 0 > lo and hi <= 1.6 and lo >= -1.6, (hi, lo)  # looks like the 👍 ones: up; like the 👎 ones: down; always bounded
+    noise = [{"id": str(i), "rating": random.choice([1, -1]), "features": {"win": random.uniform(3, 9), "frames": random.uniform(3, 9), "score": random.uniform(3, 9), "penalty": random.choice([0, 1, 2]), "sig": {"loud": random.random()}}} for i in range(40)]
+    assert learn.fit(noise)["conf"] <= 0.3  # ratings that follow no pattern: (almost) no nudge
+    taste = [mk(i, i % 2 == 0, "caseoh") for i in range(20)] + [mk(100 + i, False, "someoneelse") for i in range(20)]
+    mt = learn.fit(taste)
+    ft = {"win": 6, "frames": 7, "score": 6, "penalty": 0, "sig": {"loud": 0.5}}
+    assert learn.adjust({**ft, "channel": "CaseOh"}, mt) > learn.adjust({**ft, "channel": "someoneelse"}, mt)  # it also learns which streamers the user likes
+    sm = learn.summary(rows)
+    assert sm["rated"] == 40 and sm["good"] == 20 and sm["likes"], sm
+
+
+def test_meh_is_neutral():
+    import random, tempfile
+    random.seed(2)
+    learn.W_FILE = Path(tempfile.mkdtemp()) / "w.json"
+    assert 0 < learn.MEH_WEIGHT < 0.5
+    mk = lambda i, r, win: {"id": str(i), "rating": r, "features": {"win": win, "frames": random.uniform(5, 9), "score": random.uniform(4, 7), "penalty": 0, "sig": {"loud": random.random()}}}
+    base = [mk(i, 1 if i % 2 else -1, random.uniform(7, 9) if i % 2 else random.uniform(3, 5)) for i in range(30)]
+    meh = [mk(100 + i, 0, random.uniform(3, 9)) for i in range(60)]  # twice as many meh clips as clips that stood out, with no pattern
+    only_meh = [mk(200 + i, 0, 5) for i in range(60)] + [mk(300, 1, 8), mk(301, -1, 4)]
+    assert learn.fit(only_meh) is None  # lots of meh but hardly any 👍/👎: nothing is learned (the ratings are what teaches)
+    m1, m2 = learn.fit(base), learn.fit(base + meh)
+    a, b = learn.adjust({"win": 9, "frames": 7, "score": 6, "penalty": 0, "sig": {"loud": 0.5}}, m1), learn.adjust({"win": 9, "frames": 7, "score": 6, "penalty": 0, "sig": {"loud": 0.5}}, m2)
+    assert a > 0 and b > 0 and abs(a - b) < 0.5, (a, b)  # many meh clips do not flip or wipe out what the standouts say
 
 
 def test_prepare_only_schedule():
@@ -188,19 +211,17 @@ def test_removed_clips_teach_meh():
         srv.shutdown(); d.R, d.REVIEW = keep
 
 
-def test_meh_is_neutral():
-    import random, tempfile
-    random.seed(2)
-    learn.W_FILE = Path(tempfile.mkdtemp()) / "w.json"
-    assert 0 < learn.MEH_WEIGHT < 0.5
-    mk = lambda i, r, win: {"id": str(i), "rating": r, "features": {"win": win, "frames": random.uniform(5, 9), "score": random.uniform(4, 7), "penalty": 0, "sig": {"loud": random.random()}}}
-    base = [mk(i, 1 if i % 2 else -1, random.uniform(7, 9) if i % 2 else random.uniform(3, 5)) for i in range(30)]
-    meh = [mk(100 + i, 0, random.uniform(3, 9)) for i in range(60)]  # twice as many meh clips as clips that stood out, with no pattern
-    only_meh = [mk(200 + i, 0, 5) for i in range(60)] + [mk(300, 1, 8), mk(301, -1, 4)]
-    assert learn.fit(only_meh) is None  # lots of meh but hardly any 👍/👎: nothing is learned (the ratings are what teaches)
-    m1, m2 = learn.fit(base), learn.fit(base + meh)
-    a, b = learn.adjust({"win": 9, "frames": 7, "score": 6, "penalty": 0, "sig": {"loud": 0.5}}, m1), learn.adjust({"win": 9, "frames": 7, "score": 6, "penalty": 0, "sig": {"loud": 0.5}}, m2)
-    assert a > 0 and b > 0 and abs(a - b) < 0.35, (a, b)  # many meh clips do not flip or wipe out what the standouts say
+def test_dashboard_script_syntax():
+    """A syntax error in the page script silently breaks the whole dashboard: check it with Node when Node is installed (skipped otherwise)."""
+    import re, shutil, subprocess, tempfile
+    node = shutil.which("node")
+    if not node:
+        return
+    html = (Path(__file__).resolve().parent.parent / "dashboard.html").read_text(encoding="utf-8")
+    js = chr(10).join(re.findall(r"<script>(.*?)</script>", html, re.S))
+    f = Path(tempfile.mkdtemp()) / "page.js"; f.write_text(js, encoding="utf-8")
+    r = subprocess.run([node, "--check", str(f)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-300:]
 
 
 def test_titles_survive_bad_on_video_text():

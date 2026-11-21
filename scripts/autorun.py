@@ -398,7 +398,12 @@ def _stage1(v, score, job, n, c, creator):
         vb = round(min(1.0, 0.25 * __import__("math").log10(v["views"] / 100)), 2)
         bonus += vb; bonus_notes.append((vb, f"viewers picked it ({v['views']:,} views)"))
     sg = c.get("sig") or {}  # the streamer reacting out loud is what made clips stand out in the user's ratings (excited voice and swearing separated 👍 clips from meh ones)
-    rb = round(min(1.0, 0.3 * min(sg.get("voice", 0), 2.5) + 0.3 * min(sg.get("swear", 0), 2.0)), 2)
+    try:  # the built-in boost is only a starting guess (tuned on one user): it fades as Clippy learns what THIS user likes (podcasts, IRL, other games...)
+        import learn
+        fade = 1.0 - learn.confidence()
+    except Exception:
+        fade = 1.0
+    rb = round(fade * min(1.0, 0.3 * min(sg.get("voice", 0), 2.5) + 0.3 * min(sg.get("swear", 0), 2.0)), 2)
     if rb >= 0.1:
         bonus += rb; bonus_notes.append((rb, "excited voice / swearing: the streamer is reacting"))
     scene, win_score, res_score = None, None, None
@@ -498,7 +503,10 @@ def _stage2(v, job, st):
     rank = adj + score * 0.3 + bonus  # AI judgement first (minus penalties, plus a bonus when the streamer reacts), the local viral score second
     if pen:
         log("  penalties: " + "; ".join(f"-{p:g} {w}" for p, w in pen) + f" -> rank {rank:.1f}")
+    dur_ = max(1.0, float(c.get("end", 0)) - float(c.get("start", 0)))
     feat = {"win": win_score, "frames": res_score, "ai": c.get("ai"), "score": score, "penalty": round(sum(p for p, _ in pen), 2), "sig": c.get("sig"), "why": c.get("why"),
+            "seconds": round(dur_, 1), "twitch": 1 if v.get("twitch") else 0, "views_log": round(__import__("math").log10((v.get("views") or 0) + 1), 2),
+            "wps": round(len(str(c.get("text") or "").split()) / dur_, 2), "channel": v.get("channel"),  # more for the learning: length, source, popularity, speech speed, which streamer
             "notes": [f"-{p:g} {w}" for p, w in pen] + [f"+{p:g} {w}" for p, w in bonus_notes], "bit": (win or {}).get("why"), "scene": scene}  # notes/bit/scene: shown in the dashboard score tooltip
     try:  # after enough 👍/👎 ratings: a small nudge (at most +-1) toward moments that look like the ones the user liked (scripts/learn.py)
         import learn
