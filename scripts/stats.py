@@ -35,9 +35,10 @@ def yt_stats(link):
     return {"views": v, "likes": l, "comments": c}
 
 
-def tiktok_text():
+def tiktok_text(mode="headless"):
+    """Reads the TikTok Studio posts list. Default: a HEADLESS browser (no window at all, so it can never pop up over a game or take focus; TikTok accepts it, YouTube does not)."""
     from playwright.sync_api import sync_playwright
-    proc = upload.start_chrome(upload.PORT)
+    proc = upload.start_chrome(upload.PORT, mode=mode)
     try:
         upload.wait_cdp(upload.PORT)
         with sync_playwright() as p:
@@ -76,6 +77,8 @@ def refresh():
     now = dt.datetime.now().isoformat(timespec="seconds")
     try:
         rows = parse_tiktok(tiktok_text())
+        if not rows and any(p.get("tiktok_status") for p in posts) and upload.quiet_screen(0):  # the hidden browser saw nothing (a login wall?): one try with the off-screen window, never while a full-screen app is active
+            rows = parse_tiktok(tiktok_text("offscreen"))
     except Exception as e:
         print(f"TikTok numbers unavailable: {type(e).__name__}: {str(e)[:120]}"); rows = []
     done = 0

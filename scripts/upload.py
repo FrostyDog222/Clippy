@@ -83,7 +83,7 @@ def quiet_screen(wait=0):
     return True
 
 
-def start_chrome(port=None, only=None):
+def start_chrome(port=None, only=None, mode=None):
     if not CHROME:
         sys.exit("Chrome not found")
     args = [CHROME, f"--user-data-dir={PROFILE}", "--no-first-run", "--no-default-browser-check", "--disable-session-crashed-bubble",
@@ -94,13 +94,16 @@ def start_chrome(port=None, only=None):
     if port:
         # No user-agent or automation-flag tricks: if a site blocks a mode, the run stops with a clear message.
         args += [f"--remote-debugging-port={port}", "--window-size=1920,1080", "about:blank"]
-        mode = browser_mode()
+        mode = mode or browser_mode()
         # offscreen = normal Chrome window placed beyond the display edge (nothing visible, site sees an ordinary browser)
         args += (["--headless=new"] if mode == "headless" else ["--start-minimized"] if mode == "minimized"
                  else ["--window-position=-3000,0"] if mode == "offscreen" else [])
     else:
         args += ["https://studio.youtube.com", "https://www.tiktok.com/login"]
-    return subprocess.Popen(args)
+    si = None
+    if port and sys.platform == "win32" and mode in ("offscreen", "minimized"):  # ask Windows to show the window WITHOUT taking focus (a game in front is not pushed to the taskbar)
+        si = subprocess.STARTUPINFO(); si.dwFlags |= subprocess.STARTF_USESHOWWINDOW; si.wShowWindow = 7 if mode == "minimized" else 4  # SW_SHOWMINNOACTIVE / SW_SHOWNOACTIVATE
+    return subprocess.Popen(args, startupinfo=si) if si else subprocess.Popen(args)
 
 
 def wait_cdp(port, secs=30):
