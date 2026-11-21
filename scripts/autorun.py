@@ -394,7 +394,10 @@ def _stage1(v, score, job, n, c, creator):
         pass
     cut_range = []
     win = None
-    bonus = 0.0
+    bonus, bonus_notes = 0.0, []
+    if v.get("twitch") and (v.get("views") or 0) >= 300:  # the streamer's own audience picked this moment: the more viewers, the stronger the signal (+0.25 at 1k views up to +1.0 at 100k+... capped)
+        vb = round(min(1.0, 0.25 * __import__("math").log10(v["views"] / 100)), 2)
+        bonus += vb; bonus_notes.append((vb, f"viewers picked it ({v['views']:,} views)"))
     scene, win_score, res_score = None, None, None
     if CFG.get("title_writer") in ("claude", "api"):  # an AI reads what is said (silences included) and finds where the bit really starts and ends
         try:
@@ -414,7 +417,10 @@ def _stage1(v, score, job, n, c, creator):
                 f"standalone {win['standalone']}{', risky (flag only)' if win['risky'] else ''}: {win['why']}")
             if strict and ORIGIN != "live":
                 if win["score"] < 4.5:
-                    log("  the AI rates this bit as weak, skipping"); return None
+                    if v.get("twitch") and (v.get("views") or 0) >= 50000:  # a clip that many viewers picked is not thrown away over the speech alone: a penalty, it still has to rank well
+                        pen.append((1.0, f"weak AI score ({win['score']:g}/10) although {v['views']:,} viewers picked it"))
+                    else:
+                        log("  the AI rates this bit as weak, skipping"); return None
                 if win["score"] < 6:
                     pen.append((0.5 * (6 - win["score"]), f"bit scored {win['score']:g}/10"))
                 if win["speaker"] == "game":  # the streamer's reaction matters more than what happens in the game
@@ -423,10 +429,10 @@ def _stage1(v, score, job, n, c, creator):
                     pen.append((1.0, "not standalone"))
             win_score = win["score"]
             if win["speaker"] in ("streamer", "mixed"):
-                bonus += 0.5  # the streamer reacting is what makes the clip
+                bonus += 0.5; bonus_notes.append((0.5, "the streamer reacts"))  # the streamer reacting is what makes the clip
             c = {**c, "start": ws, "end": we, "text": " ".join(w["w"] for w in allw if ws <= w["s"] < we)[:400]}
             cut_range = ["--start", f"{ws:.2f}", "--end", f"{we:.2f}"]
-    return {"pen": pen, "c": c, "cut_range": cut_range, "win": win, "bonus": bonus, "win_score": win_score, "score": score, "strict": strict, "n": n}
+    return {"pen": pen, "c": c, "cut_range": cut_range, "win": win, "bonus": bonus, "win_score": win_score, "score": score, "strict": strict, "n": n, "bonus_notes": bonus_notes}
 
 
 def _est(st):
@@ -438,6 +444,7 @@ def _est(st):
 def _stage2(v, job, st):
     """Stage 2: the AI frame look / visual check, snapping to a scene cut, the final rank. Returns None or what the cut needs."""
     pen, c, cut_range, win, bonus, win_score, score, strict = (st[k] for k in ("pen", "c", "cut_range", "win", "bonus", "win_score", "score", "strict"))
+    bonus_notes = st.get("bonus_notes", [])
     scene, res_score = None, None
     if CFG.get("title_writer") in ("claude", "api"):  # an AI looks at 3 frames of the moment: skips non-GTA / nothing-happening moments, tells the title writer what happens
         import ai_check
@@ -489,7 +496,7 @@ def _stage2(v, job, st):
     if pen:
         log("  penalties: " + "; ".join(f"-{p:g} {w}" for p, w in pen) + f" -> rank {rank:.1f}")
     feat = {"win": win_score, "frames": res_score, "ai": c.get("ai"), "score": score, "penalty": round(sum(p for p, _ in pen), 2), "sig": c.get("sig"), "why": c.get("why"),
-            "notes": [f"-{p:g} {w}" for p, w in pen] + ([f"+{bonus:g} the streamer reacts"] if bonus else []), "bit": (win or {}).get("why"), "scene": scene}  # notes/bit/scene: shown in the dashboard score tooltip
+            "notes": [f"-{p:g} {w}" for p, w in pen] + [f"+{p:g} {w}" for p, w in bonus_notes], "bit": (win or {}).get("why"), "scene": scene}  # notes/bit/scene: shown in the dashboard score tooltip
     try:  # after enough 👍/👎 ratings: a small nudge (at most +-1) toward moments that look like the ones the user liked (scripts/learn.py)
         import learn
         nudge = learn.adjust(feat)
