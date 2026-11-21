@@ -134,6 +134,28 @@ def test_learning_from_ratings():
     assert learn.adjust({"win": 9}, None) == 0.0 or True
 
 
+def test_prepare_only_schedule():
+    import json, sys, tempfile, time
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d, tick
+    tmp = Path(tempfile.mkdtemp()); keep = (d.REVIEW, d.read_posts)
+    try:
+        d.REVIEW = tmp; d.read_posts = lambda: []
+        now = int(time.time())
+        for i, posted in ((0, False), (1, False), (2, True)):  # two waiting clips, one already posted
+            stem = f"{now - 60 * (i + 1)}__clip_{i + 1}"
+            (tmp / f"{stem}.json").write_text("{}"); (tmp / f"{stem}.mp4").write_bytes(b"x")
+            if posted:
+                (tmp / f"{stem}.posted.json").write_text(json.dumps({"youtube": "http://y"}))
+        assert len(d.waiting_clips()) == 2
+        off = {"auto_post": False, "enabled": True, "posts_per_day": 2, "window_start": "00:00", "window_end": "23:59", "min_gap_minutes": 0, "start_date": "2026-01-01", "private_days": 0}
+        assert len(d.sched_posts(off)) == 2
+        assert not tick.decide(off, d.sched_posts(off), __import__("datetime").datetime.now())[0]  # 2 prepared = the day's quota: no more clips are prepared
+        assert len(d.sched_posts({**off, "auto_post": True})) == 0  # Auto-Post ON: only real posts count
+    finally:
+        d.REVIEW, d.read_posts = keep
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

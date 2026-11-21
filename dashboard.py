@@ -315,6 +315,34 @@ def start_check():
     _bg("check", ["status"], NOWIN)
 
 
+MAX_WAITING = 8  # prepare-only mode: stop preparing new clips while this many wait in "Ready to post"
+
+
+def waiting_clips():
+    """Clips in Ready to post that were not posted yet: (stem, creation time)."""
+    out = []
+    for f in (REVIEW.glob("*__clip_*.json") if REVIEW.exists() else []):
+        if f.name.endswith(".posted.json") or not f.with_suffix(".mp4").exists() or not STEM.match(f.stem):
+            continue
+        sf = REVIEW / (f.stem + ".posted.json")
+        try:
+            if sf.exists() and any(json.loads(sf.read_text(encoding="utf-8")).values()):
+                continue
+            out.append((f.stem, dt.datetime.fromtimestamp(int(f.stem.split("__")[0]))))
+        except Exception:
+            continue
+    return out
+
+
+def sched_posts(c):
+    """What the schedule counts. Auto-Post ON: the real posts. Auto-Post OFF ('prepare only'): a prepared clip counts like a post (daily limit, minimum gap,
+    time window), so Autopilot prepares about as many clips as it would have posted instead of running non-stop."""
+    posts = read_posts()
+    if c.get("auto_post"):
+        return posts
+    return posts + [{"date": t.strftime("%Y-%m-%d"), "ts": t.isoformat(timespec="seconds")} for _, t in waiting_clips()]
+
+
 def autopilot_loop():
     while True:
         time.sleep(60)
@@ -328,9 +356,16 @@ def autopilot_loop():
                 c["autopilot"] = False; save_cfg(c); continue
             if running() or c.get("live_watch"):  # live mode ON: the live watcher posts, videos are not used
                 continue
-            ok, _, _ = tick.decide(c, read_posts(), dt.datetime.now(), PAUSE.exists())
-            if ok:
-                run_now()
+            if c.get("auto_post"):
+                ok, _, _ = tick.decide(c, read_posts(), dt.datetime.now(), PAUSE.exists())
+                if ok:
+                    run_now()
+            else:  # prepare only: find and prepare clips on the same schedule, never post, and stop while enough are waiting
+                if len(waiting_clips()) >= MAX_WAITING:
+                    continue
+                ok, _, _ = tick.decide(c, sched_posts(c), dt.datetime.now(), PAUSE.exists())
+                if ok:
+                    run_now(force=True)  # our own check above already applied the schedule (autorun would only look at real posts)
         except Exception:
             pass
 
@@ -433,7 +468,7 @@ def clean(new, old):
     out["display_name"] = re.sub(r"\s+", " ", str(new.get("display_name", ""))).strip()[:40]  # the name in the welcome line
     out["blocked_streamers"] = ", ".join(x.strip() for x in re.split(r"[,;\n]", str(new.get("blocked_streamers", ""))) if x.strip())[:300]  # streamers that are never clipped
     out["auto_update"] = bool(new.get("auto_update", True))  # install new Clippy versions by itself (settings and clips are never touched)
-    out["auto_post"] = bool(new.get("auto_post", False))  # OFF (default): finished clips wait in "Ready to post" until the Post button is pressed
+    # auto_post is not set here: its switches (Ready to post and Settings) save immediately through /api/autopost; OFF (default) = finished clips wait in "Ready to post"
     out["post_youtube"] = bool(new.get("post_youtube", True)); out["post_tiktok"] = bool(new.get("post_tiktok", True))  # where to post
     out["topic"] = re.sub(r"\s+", " ", str(new.get("topic", "GTA 6"))).strip()[:60]  # what to look for (a game or any subject); empty = no topic
     out["stop_on_strike"] = bool(new.get("stop_on_strike", True))
@@ -647,7 +682,7 @@ class H(http.server.BaseHTTPRequestHandler):
         if self.path == "/api/state":
             c, posts = read_cfg(), read_posts()
             today = dt.date.today().isoformat()
-            ok, why, mode = tick.decide(c, posts, dt.datetime.now(), PAUSE.exists())
+            ok, why, mode = tick.decide(c, sched_posts(c), dt.datetime.now(), PAUSE.exists())
             log = LOG.read_text(encoding="utf-8")[-1500:] if LOG.exists() else ""
             return self.send(200, json.dumps({"config": c, "paused": PAUSE.exists(), "checks": checks(),
                                               "today": [p for p in posts if p.get("date") == today and not p.get("deleted")], "log": log,
@@ -690,6 +725,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 run_custom(b.get("url", ""), b.get("clips", 1), b.get("start"), b.get("length"), bool(b.get("relaxed")))
             except (ValueError, TypeError) as e:
                 return self.send(400, str(e), "text/plain")
+        elif self.path == "/api/autopost":  # Auto-Post on/off right away (ON: finished clips are posted by Clippy; OFF: they wait in Ready to post)
+            c = read_cfg(); c["auto_post"] = not c.get("auto_post", False); save_cfg(c)
         elif self.path == "/api/autopilot":
             c = read_cfg(); c["autopilot"] = not c.get("autopilot", False)
             if c["autopilot"] and blocked_msg(c):
