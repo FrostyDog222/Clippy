@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/clippy-dark.png">
-    <img src="docs/clippy-light.png" alt="Clippy, the paperclip mascot with sunglasses and a thumbs up" width="520">
+    <img src="docs/clippy-light.png" alt="Clippy, the paperclip mascot with sunglasses and a thumbs up" width="380">
   </picture>
 </p>
 
