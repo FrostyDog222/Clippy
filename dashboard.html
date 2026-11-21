@@ -123,7 +123,7 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:p
   <div><h1 class="hello"><span id="welcome">Welcome back!</span> &#128075;</h1><div class="sub">Turn your streams and videos into viral Shorts &amp; posts with Clippy.</div><div class="clk" id="clk"></div></div>
   <div class="topr">
     <div class="ctrl"><span class="pill"><svg class="ic"><use href="#i-moon"/></svg><span class="dot" id="dot"></span><span id="status">Loading</span></span>
-      <span class="aup"><span>Autopilot</span><button class="tg" id="ap" title="Turn autopilot on or off" onclick="post('/api/autopilot')"></button></span></div>
+      <span class="aup"><span>Autopilot</span><button class="tg" id="ap" title="Turn autopilot on or off" onclick="apToggle()"></button></span></div>
     <div class="lets">Let's create!</div>
   </div>
 </div>
@@ -536,6 +536,8 @@ if((l.channels_dislike||[]).length)h+='<br>Streamers you like less: <b>'+l.chann
 h+='<br><span class="mut">Everyone uses Clippy differently (gaming, podcasts, real-life streams...), so it learns from YOU. Meh clips count as neutral; &#128077; and &#128078; teach the most. Everything stays on this PC.</span>';b.innerHTML=h}
 async function learnReset(){if(!confirm('Start fresh? Clippy forgets what it learned from your ratings (the old ratings are set aside, not deleted).'))return;const r=await fetch('/api/learn/reset',{method:'POST'});if(!r.ok)toast(await r.text(),1);else{toast('Clippy starts learning from scratch');load()}}
 
+async function apToggle(){const was=!!(srv&&srv.autopilot);const r=await fetch('/api/autopilot',{method:'POST'});if(!r.ok){const t=await r.text();r.status==409?alert(t):toast(t,1);return}await load();
+if(!was&&srv&&srv.autopilot&&!$('asw').classList.contains('on')&&confirm('Autopilot is ON now, but it only works while Clippy is running.\n\nDo you want Clippy to start by itself when Windows starts, so Autopilot keeps working after a restart?\n\nOK = continue (you will see a short warning before it is turned on).\nCancel = not now (you can turn it on later in Settings, "Start with Windows").'))setAS()}
 async function setAS(){const on=!$('asw').classList.contains('on');
 if(on){if(!(srv&&srv.autopilot)){toast('Turn Autopilot on first: Start with Windows only works while Autopilot is on.',1);return}
 if(!confirm('WARNING - please read:\n\nClippy will start by itself, hidden, every time you sign in to Windows (only while Autopilot is ON).\n\n- It then runs in the background without any window and keeps using your PC (CPU, disk, internet) to find and cut clips.\n- If Auto-Post is ON, it also posts to YouTube / TikTok by itself, with nobody watching.\n- It stops only with Quit dashboard. Turn this switch off to stop it starting with Windows.\n\nTurn it on?'))return}
