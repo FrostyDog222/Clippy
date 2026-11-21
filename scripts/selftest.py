@@ -927,6 +927,26 @@ def test_stretched_words_are_trimmed_to_when_they_were_said():
     assert t[1] == ws[1] | {"s": 39.45, "e": 39.63}         # normal words are untouched
 
 
+def test_old_clips_leave_ready_to_post_by_themselves():
+    import sys, tempfile, json, time, datetime
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    now = int(time.time()); old, new, kept = f"{now - 5 * 86400}__clip_1", f"{now - 3600}__clip_1", f"{now - 5 * 86400}__clip_2"
+    assert d.review_expiry({}, old, 3) < time.time() and d.review_expiry({}, new, 3) > time.time() and d.review_expiry({}, old, 0) is None
+    future = (datetime.datetime.now() + datetime.timedelta(hours=2)).isoformat(timespec="minutes")
+    assert d.review_expiry({"scheduled": {"at": future}}, old, 3) is None and d.review_expiry({"keep": True}, old, 3) is None   # a coming post or a Keep stops the removal
+    tmp = Path(tempfile.mkdtemp()); keep, kc = d.REVIEW, d.read_cfg
+    d.REVIEW = tmp; d.read_cfg = lambda: {"keep_clips_days": 3}
+    try:
+        for s_, extra in ((old, {}), (new, {}), (kept, {"keep": True})):
+            (tmp / (s_ + ".mp4")).write_bytes(b"v"); (tmp / (s_ + ".raw")).write_bytes(b"r"); (tmp / (s_ + ".json")).write_text(json.dumps({"features": {"win": 1}, **extra}))
+        d.review_expire()
+        assert not (tmp / (old + ".mp4")).exists() and not (tmp / (old + ".raw")).exists() and not (tmp / (old + ".json")).exists()   # the old one and its raw copy are gone
+        assert (tmp / (new + ".mp4")).exists() and (tmp / (kept + ".mp4")).exists()
+    finally:
+        d.REVIEW, d.read_cfg = keep, kc
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

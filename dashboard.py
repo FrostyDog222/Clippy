@@ -727,7 +727,42 @@ def review_edit(stem, title, desc, tags, tiktok=""):
 WHY = ("boring", "notfunny", "noaction", "slow", "nocontext", "offtopic", "nudity", "crop", "cutoff", "audio", "captions", "title", "language", "repeat", "other")  # why a clip was a 👎
 
 
-def review_remove(stem):
+def review_expiry(d, stem, days):
+    """When this clip leaves Ready to post by itself: made-time + 'Keep finished clips for' days (epoch seconds), or None (0 days = never; a clip with a coming scheduled post is kept)."""
+    try:
+        if days <= 0 or d.get("keep"):  # 'Keep' on a clip (or a group) stops the automatic removal
+            return None
+        sc = d.get("scheduled")
+        if sc and dt.datetime.fromisoformat(sc["at"]) > dt.datetime.now():
+            return None
+        return int(stem.split("__")[0]) + days * 86400
+    except Exception:
+        return None
+
+
+def review_expire():
+    """The 'Keep finished clips for' setting also empties Ready to post: older clips are removed with their raw copies (never one that is being posted / cut right now, or has a post scheduled)."""
+    try:
+        days = float(read_cfg().get("keep_clips_days", 3))
+    except Exception:
+        return
+    if days <= 0 or not REVIEW.exists() or (R / "post.lock").exists():
+        return
+    for f in list(REVIEW.glob("*__clip_*.json")):
+        if f.name.endswith(".posted.json") or not STEM.match(f.stem):
+            continue
+        try:
+            if (REVIEW_STATUS.get(f.stem) or {}).get("state") == "posting":
+                continue
+            d = json.loads(f.read_text(encoding="utf-8"))
+            t = review_expiry(d, f.stem, days)
+            if t and time.time() > t:
+                review_remove(f.stem, auto=True)
+        except Exception:
+            pass
+
+
+def review_remove(stem, auto=False):
     """Take a clip out of Ready to post (its video and files are deleted; this cannot be undone)."""
     try:  # removing a clip nobody rated and nobody posted = "meh": keep that as a learning example (the clip's signals are deleted with it)
         cf, pf = REVIEW / (stem + ".json"), REVIEW / (stem + ".posted.json")
@@ -735,7 +770,7 @@ def review_remove(stem):
         posted = pf.exists() and any(json.loads(pf.read_text(encoding="utf-8")).values())
         if d.get("features") and (d.get("rating") in (1, -1) or d.get("reviewed")):
             log_rating(stem, d, d.get("rating") or 0, removed=True); learn_refit()  # you rated it (👍 / 😐 / 👎): that rating is written down again before the clip goes, so Clippy keeps learning from it for good
-        elif d.get("features") and not d.get("rating") and not posted:
+        elif d.get("features") and not d.get("rating") and not posted and not auto:  # an automatic clean-up says nothing about the clip: no "meh" is learned from it
             log_rating(stem, d, 0, removed=True); learn_refit()
     except Exception:
         pass
@@ -878,6 +913,10 @@ def learn_info():
 def review_items():
     review_purge()
     out = []
+    try:
+        _days = float(read_cfg().get("keep_clips_days", 3))
+    except Exception:
+        _days = 0
     for f in (sorted(REVIEW.glob("*__clip_*.json"), reverse=True) if REVIEW.exists() else []):
         if f.name.endswith(".posted.json") or not f.with_suffix(".mp4").exists() or not STEM.match(f.stem):
             continue
@@ -891,7 +930,7 @@ def review_items():
             et, ed, eg = split_meta(meta)
             out.append({"id": f.stem, "title": meta.get("yt_title", ""), "desc": meta.get("yt_description", ""), "caption": meta.get("tiktok_caption", ""),
                         "edit_title": et, "edit_desc": ed, "edit_tags": " ".join(eg), "edit_tiktok": meta.get("tiktok_custom", ""), "edited": bool(meta.get("edited")),
-                        "seconds": d.get("seconds"), "layout": d.get("layout"), "captions_off": d.get("captions_off"), "origin": d.get("origin"), "raw": (REVIEW / (stem + ".raw")).exists() if d.get("origin") == "live" else None, "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "reviewed": bool(d.get("reviewed") or d.get("rating") in (1, -1)), "reason": d.get("reason"), "reasons": d.get("reasons"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
+                        "seconds": d.get("seconds"), "layout": d.get("layout"), "captions_off": d.get("captions_off"), "expires": review_expiry(d, f.stem, _days), "keep": bool(d.get("keep")), "origin": d.get("origin"), "raw": (REVIEW / (stem + ".raw")).exists() if d.get("origin") == "live" else None, "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "reviewed": bool(d.get("reviewed") or d.get("rating") in (1, -1)), "reason": d.get("reason"), "reasons": d.get("reasons"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
                         "posted": json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {}, "status": REVIEW_STATUS.get(f.stem)})
         except Exception:
             continue
@@ -1123,6 +1162,7 @@ def sched_loop():
         try:
             sched_tick()
             notify_tick()
+            review_expire()
         except Exception:
             pass
 
@@ -1477,6 +1517,18 @@ class H(http.server.BaseHTTPRequestHandler):
                 log_rating(stem, d, body["rating"]); learn_refit()
             except Exception:
                 return self.send(400, "bad rating", "text/plain")
+        elif self.path == "/api/review/keep":  # stop (or allow again) the automatic removal of one clip or a group
+            try:
+                body = json.loads(self.rfile.read(n)); ids = body["ids"]; keep = bool(body["keep"]); assert isinstance(ids, list) and len(ids) <= 500 and all(STEM.match(i) for i in ids)
+                for i in ids:
+                    cf = REVIEW / (i + ".json")
+                    if cf.exists():
+                        d = json.loads(cf.read_text(encoding="utf-8")); d["keep"] = keep if keep else None
+                        if not keep:
+                            d.pop("keep", None)
+                        cf.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+            except Exception:
+                return self.send(400, "bad values", "text/plain")
         elif self.path in ("/api/review/post", "/api/review/remove"):
             try:
                 body = json.loads(self.rfile.read(n)); stem = body["id"]; assert STEM.match(stem)
