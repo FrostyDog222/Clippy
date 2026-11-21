@@ -26,6 +26,7 @@ SESSION_MIN = 180        # one recording session per stream, then it is picked u
 DISCOVER_EVERY = 300     # seconds between searches for new live streams
 SEG_KEEP = 15 * 60       # delete recorded 60 s segments older than this (a clip only needs the last minute)
 QUEUE_KEEP = 15 * 60     # a chat spike not used within 15 min is dropped
+BIG_CHAT_REL = 1.0       # after 4 spikes of a stream: only a spike at or above that stream's own median spike is worth cutting (chat of big streamers is busy all the time); 1.3 is stricter
 norm = autorun.norm
 
 
@@ -63,6 +64,8 @@ def discover(cfg):
         if re.search(r"no commentary|giveaways?|drops? giveaway", t, re.I):  # nobody talking / promo streams: no reactions to clip
             continue
         if s["platform"] == "YouTube" and not tp["matches"](t):
+            continue
+        if not autorun.textutil.stream_language_ok(s.get("lang"), cfg):  # the speech must be in a language you picked: otherwise every spike would be thrown away at the language check
             continue
         if autorun.BANNED.search(t):
             continue
@@ -116,7 +119,11 @@ class Watch:
                 self.seen.add(f.name); self.spikes += 1
                 r = rates.get(f.name, 0); self.rates.append(r)
                 base = sorted(self.rates)[len(self.rates) // 2] or 1  # the median spike of this stream so far (the first one counts as 1.0)
-                out.append({"path": f, "rate": r, "rel": r / base, "born": time.time(), "s": self.s})
+                rel = r / base
+                if len(self.rates) >= 4 and rel < BIG_CHAT_REL:  # a big streamer's chat is "going crazy" all the time: once there is a baseline, a spike must clearly beat THIS chat's usual spikes
+                    log(f"  chat spike on {self.s['channel']} ({r} msgs / 10 s) is not above this chat's usual ({base}): skipped without spending time on it")
+                    continue
+                out.append({"path": f, "rate": r, "rel": rel, "born": time.time(), "s": self.s})
         return out
 
 
@@ -208,6 +215,8 @@ def main():
                     if len(watches) >= maxn:
                         break
                     if s["url"] in have or cooldown.get(s["url"], 0) > time.time():
+                        continue
+                    if any(norm(w.s["channel"]) == norm(s["channel"]) for w in watches):  # the same streamer simulcasting on two platforms is watched once
                         continue
                     log(f"watching {s['platform']} {s['channel']} ({s.get('viewers')} viewers): {s['title'][:60]}")
                     watches.append(Watch(s)); have.add(s["url"])

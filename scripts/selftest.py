@@ -677,6 +677,34 @@ def test_removing_a_rated_clip_keeps_what_clippy_learned():
         d.R, d.REVIEW, d.learn_refit, learn.R, learn.W_FILE = keep
 
 
+def test_live_discovery_language_and_multilingual_chat():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import textutil as t
+    assert t.stream_language_ok("en", {"languages": ["en"]}) and not t.stream_language_ok("pt", {"languages": ["en"]})
+    assert t.stream_language_ok("", {"languages": ["en"]}) and t.stream_language_ok("de", {"languages": "any"}) and t.stream_language_ok("DE", {"languages": ["en", "de"]})
+    assert t.chat_weight("jajajaja") == 2 and t.chat_weight("kkkkk") == 2 and t.chat_weight("no puede ser") == 3 and t.chat_weight("MEU DEUS") == 3 and t.chat_weight("krass") == 3
+    assert t.chat_weight("WTF") == 3 and t.chat_weight("LUL") == 2 and t.chat_weight("nice car") == 1       # English and plain messages unchanged
+
+
+def test_live_has_its_own_minimum_score():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent)); sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import autorun as a, dashboard as d
+    keep = (a.CFG, a.ORIGIN)
+    try:
+        a.CFG = {}; a.ORIGIN = "video"; assert a.min_score() == 7.0
+        a.ORIGIN = "live"; assert a.min_score() == 6.0                                 # live default is lower
+        a.CFG = {"min_score": 8, "min_score_live": 4.5}; assert a.min_score() == 4.5 and a.slack() == 2.5
+        a.ORIGIN = "video"; assert a.min_score() == 8.0 and a.slack() == 0.0           # the two never mix
+    finally:
+        a.CFG, a.ORIGIN = keep
+    old = d.read_cfg()
+    assert d.clean({**old, "min_score_live": 4.3}, old)["min_score_live"] == 4.5 and d.clean({**old, "min_score_live": 99}, old)["min_score_live"] == 10.0
+    import learn
+    assert "live" in learn.KEYS
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

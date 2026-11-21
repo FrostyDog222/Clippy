@@ -26,7 +26,7 @@ def gql(query, variables=None):
 
 
 _Q_GAME = """query($name:String!,$n:Int!){ game(name:$name){ displayName streams(first:$n){ edges{ node{
- title viewersCount createdAt previewImageURL(width:640,height:360) broadcaster{ login displayName } } } } } }"""
+ title viewersCount createdAt previewImageURL(width:640,height:360) broadcaster{ login displayName broadcastSettings{ language } } } } } } }"""
 _Q_SEARCH = """query($q:String!){ searchCategories(query:$q,first:5){ edges{ node{ ... on Game{ name displayName } } } } }"""
 
 
@@ -39,7 +39,8 @@ def _rows(game):
             continue
         out.append({"login": b["login"], "name": b.get("displayName") or b["login"], "title": n.get("title") or "",
                     "viewers": n.get("viewersCount") or 0, "created_at": n.get("createdAt"),
-                    "preview": n.get("previewImageURL"), "url": f"https://twitch.tv/{b['login']}"})
+                    "preview": n.get("previewImageURL"), "url": f"https://twitch.tv/{b['login']}",
+                    "lang": str((b.get("broadcastSettings") or {}).get("language") or "").lower()})  # the language the streamer set (en, pt, de, es...)
     return out
 
 

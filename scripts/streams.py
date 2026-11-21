@@ -63,7 +63,7 @@ def twitch_nokey(game="Grand Theft Auto VI", limit=20):
         print(f"twitch (no key) failed: {e}", file=sys.stderr)
         return []
     now = time.time()
-    return [{"platform": "Twitch", "channel": r["login"], "title": r["title"], "url": r["url"], "viewers": r["viewers"],
+    return [{"platform": "Twitch", "channel": r["login"], "title": r["title"], "url": r["url"], "viewers": r["viewers"], "lang": r.get("lang", ""),
              "live_for": fmt_dur(now - tw.started_ts(r["created_at"])) if tw.started_ts(r["created_at"]) else ""} for r in rows]
 
 

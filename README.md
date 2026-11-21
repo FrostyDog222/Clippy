@@ -17,6 +17,7 @@ You choose a topic (a game or anything: "GTA 6", "Minecraft", "Elden Ring"), a l
 
 - **Finds moments** from loudness jumps, excited voice, laughter, swearing, hype words, on-screen motion, YouTube's "most replayed" graph and live-chat reactions. An AI can also score the whole transcript window by window ("worth watching", funny first) and choose the exact start and end of the bit.
 - **Sources:** YouTube videos and VODs, live streams (YouTube and Twitch) with chat-spike detection, Twitch top clips (the streamers on your list first, trending only as a backup), and any YouTube or Twitch link you paste ("Clip a link"). **Manual runs and Autopilot choose their source separately**: you can run videos by hand while Autopilot works on live streams only.
+- **Live streams** are watched in your languages only (Clippy reads each Twitch streamer's language), and a streamer who is on two platforms is watched once. A chat spike is only a hint: every live moment goes through the same checks as a video, and live clips have their **own minimum score** (default 6, videos 7) because they are harder to get. Busy chats of big streamers are judged against their own usual spikes.
 - **Cuts** 1080x1920 clips with word-by-word captions (swear words are masked in the captions only, the audio is never changed), the streamer's webcam on top and the game below when a webcam is found, or a blurred background when not. If the source already has burned-in subtitles, Clippy does not add its own on top.
 - **Writes** a short catchy title or caption, the streamer's name and hashtags, with an AI (your own key: Gemini, any OpenAI-compatible endpoint, Anthropic, or a local model) or without one.
 - **Scores every clip** with a star number you can hover to see why, and lets you set a **minimum score** (default 7; Clippy warns you if you go lower, and again below 5).
@@ -27,7 +28,7 @@ You choose a topic (a game or anything: "GTA 6", "Minecraft", "Elden Ring"), a l
 Every finished clip waits in the dashboard with a preview (hover to play it muted). In three tidy rows you can:
 
 - **Post** (private or public) or **Schedule** it with a dark calendar and a 12-hour or 24-hour time picker (your choice in Settings). Scheduled clips are posted while Clippy is running; a missed time is never posted late by surprise.
-- **Edit text**, ask for a **New joke**, **Trim** it (the original is kept), or **Crop** it again with another layout.
+- **Edit text**, ask for a **New joke**, **Trim** it (the original is kept), or **Crop** it again with another layout, or leave Clippy's captions off when the video already has its own.
 - **Rate it** 👍 / 😐 / 👎 (with a reason for 👎), or **Remove** it. "Mark as not posted" lets you post a changed version again.
 - Work fast with **keyboard shortcuts** (J/K, U, N, D, X, S, E, Del), **select several clips** at once, and **spread your liked clips over the next days** while respecting your daily limit and posting window.
 

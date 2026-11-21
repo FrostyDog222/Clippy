@@ -391,11 +391,11 @@ def _stage1(v, score, job, n, c, creator):
     strict = CFG.get("quality", "strict") == "strict"  # quality over quantity is ON unless the user switches it off
     # strict no longer means "reject on any single weak signal" (that left runs empty): soft problems are penalties on one rank, only clear junk is rejected
     pen = []
-    if strict and ORIGIN != "live" and score < 5.0 - slack():  # the viral score (voice, laughter, swearing, action, chat...): 5+ = clearly strong
+    if strict and score < 5.0 - slack():  # the viral score (voice, laughter, swearing, action, chat...): 5+ = clearly strong
         if score < 4.0 - slack():
             log(f"  viral score {score} is far below the bar, skipping"); return None
         if not v.get("twitch"):  # a clip viewers made is already a moment people picked: the energy score does not need to prove it
-            pen.append((1.0, f"viral score {score} is under 5"))
+            pen.append((2.0, f"viral score {score} is under 5"))  # your ratings: clips with an energy score of 5+ were liked far more often (8 of 9 liked vs 2 of 6 disliked), so a low one now costs 2 points
     if COMPILATION.search(v.get("title", "")):  # a compilation is already edited (changing webcam layout, cuts mid-moment) and is the "reused content" risk
         pen.append((1.5, "source is a compilation"))
     try:  # licensed music in the clip (Content ID / takedown risk): the transcript shows it as music notes or [Music]
@@ -427,7 +427,7 @@ def _stage1(v, score, job, n, c, creator):
             win = ai_check.refine_window(CFG, allw, c["start"], c["end"], LIMITS[1], min(12, LIMITS[0]))
         except Exception as e:
             win = None; log(f"  AI bit finder unavailable ({str(e)[:60]})")
-        if not win and strict and ORIGIN != "live" and CFG.get("title_writer") == "api":  # nothing real judged this moment (no AI answer): the local score alone is not enough
+        if not win and strict and CFG.get("title_writer") == "api":  # nothing real judged this moment (no AI answer): the local score alone is not enough
             if not v.get("twitch"):
                 pen.append((1.0, "no AI read of what is said"))
         if not win and not v.get("twitch") and str((c.get("why") or [""])[0]).startswith("ranked by the AI"):  # a raw window the bit finder could not trim (often a minute of stream): only a fallback
@@ -436,7 +436,7 @@ def _stage1(v, score, job, n, c, creator):
             ws, we = win["start"], win["end"]
             log(f"  AI bit finder: {c['start']:.0f}-{c['end']:.0f}s -> {ws:.0f}-{we:.0f}s ({we - ws:.0f}s) score {win['score']:g}/10, speaker {win['speaker']}, "
                 f"standalone {win['standalone']}{', risky (flag only)' if win['risky'] else ''}: {win['why']}")
-            if strict and ORIGIN != "live":
+            if strict:
                 if win["score"] < 4.5 - slack():
                     if v.get("twitch") and (v.get("views") or 0) >= 50000:  # a clip that many viewers picked is not thrown away over the speech alone: a penalty, it still has to rank well
                         pen.append((1.0, f"weak AI score ({win['score']:g}/10) although {v['views']:,} viewers picked it"))
@@ -482,10 +482,10 @@ def _stage2(v, job, st):
         if res["ok"] is False and res.get("gta") and (win_score or 0) >= 7 and not ai_check.MUNDANE.search(res.get("what", "")):  # frames are a weak judge: a clearly strong bit (7+) is not vetoed by a quiet moment in them
             log(f"  AI frame check rated {res.get('score')}/10 but the bit scored {win_score:g}/10: keeping it"); res["ok"] = True
         if res["ok"] is False and (CFG.get("ai_check") or strict):
-            if ORIGIN == "live" or not res.get("gta") or (res.get("score") or 0) <= 3:  # clearly not the topic / nothing happening: out
+            if not res.get("gta") or (res.get("score") or 0) <= 3:  # clearly not the topic / nothing happening: out
                 log(f"  AI frame check: skipping ({res['reason']})"); return None
             pen.append((2.0, f"frame check: {res['reason'][:60]}"))  # the 3 frames are a weak judge: a penalty, not a veto
-        if res.get("cutscene") and ORIGIN != "live":  # a cutscene is only a clip when the streamer reacts to it (a funny reaction), never the scripted dialogue alone
+        if res.get("cutscene"):  # a cutscene is only a clip when the streamer reacts to it (a funny reaction), never the scripted dialogue alone
             sg = c.get("sig") or {}
             reacts = bool(win and win["speaker"] != "game") or sg.get("voice", 0) > 1 or sg.get("laugh", 0) > 0.5 or sg.get("swear", 0) > 0.5 or bool(v.get("twitch"))
             if not reacts:
@@ -526,7 +526,7 @@ def _stage2(v, job, st):
         log("  penalties: " + "; ".join(f"-{p:g} {w}" for p, w in pen) + f" -> rank {rank:.1f}")
     dur_ = max(1.0, float(c.get("end", 0)) - float(c.get("start", 0)))
     feat = {"win": win_score, "frames": res_score, "ai": c.get("ai"), "score": score, "penalty": round(sum(p for p, _ in pen), 2), "sig": c.get("sig"), "why": c.get("why"),
-            "seconds": round(dur_, 1), "twitch": 1 if v.get("twitch") else 0, "views_log": round(__import__("math").log10((v.get("views") or 0) + 1), 2),
+            "seconds": round(dur_, 1), "twitch": 1 if v.get("twitch") else 0, "live": 1 if ORIGIN == "live" else 0, "views_log": round(__import__("math").log10((v.get("views") or 0) + 1), 2),
             "wps": round(len(str(c.get("text") or "").split()) / dur_, 2), "channel": v.get("channel"), "source_captions": caps_share,  # more for the learning: length, source, popularity, speech speed, which streamer
             "notes": [f"-{p:g} {w}" for p, w in pen] + [f"+{p:g} {w}" for p, w in bonus_notes], "bit": (win or {}).get("why"), "scene": scene}  # notes/bit/scene: shown in the dashboard score tooltip
     try:  # after enough 👍/👎 ratings: a small nudge (at most +-1) toward moments that look like the ones the user liked (scripts/learn.py)
@@ -561,11 +561,14 @@ def expire_rejected(st, days=4):
 
 
 def min_score():
-    """The lowest score (the star number on a clip card) a moment may have to be added. Default 7. The user can lower it in Settings."""
+    """The lowest score (the star number on a clip card) a moment may have to be added: its own number for clips from live streams (default 6: they are harder to get) and
+    for videos / VODs (default 7). The user can change both in Settings."""
+    live = ORIGIN == "live"
+    default = 6.0 if live else 7.0
     try:
-        return max(1.0, min(10.0, float(CFG.get("min_score", 7.0))))
+        return max(1.0, min(10.0, float(CFG.get("min_score_live" if live else "min_score", default))))
     except (TypeError, ValueError):
-        return 7.0
+        return default
 
 
 def slack():

@@ -415,6 +415,19 @@ def sched_posts(c):
     return posts + [{"date": t.strftime("%Y-%m-%d"), "ts": t.isoformat(timespec="seconds")} for _, t in waiting_clips(include_reviewed=True)]
 
 
+def log_text():
+    """What the Current run log shows: the live watcher's log while live watching is on (it has its own file), otherwise the log of the last normal run."""
+    try:
+        lf = R / "live_watch.log"
+        if (live_status() is not None or read_cfg().get("live_watch")) and lf.exists():
+            t = lf.read_text(encoding="utf-8", errors="replace")
+            i = t.rfind("live watcher started")
+            return t[max(0, i - 9):][-2500:] if i >= 0 else t[-2500:]
+        return LOG.read_text(encoding="utf-8")[-1500:] if LOG.exists() else ""
+    except OSError:
+        return ""
+
+
 def start_live(by, target):
     """Start the live watcher (the dashboard's live loop launches it): by = "manual" (you pressed Run now: the schedule does not apply) or "auto" (Autopilot: the schedule applies);
     target = how many clips it makes when Auto-Post is OFF, then it switches itself off."""
@@ -572,6 +585,11 @@ def clean(new, old):
     out["display_name"] = re.sub(r"\s+", " ", str(new.get("display_name", ""))).strip()[:40]  # the name in the welcome line
     out["auto_clips_per_run"] = max(1, min(10, int(new.get("auto_clips_per_run", 1) or 1)))  # clips per automatic (Autopilot) run; the manual "clips this run" is saved right away by /api/clips
     out["blocked_streamers"] = ", ".join(x.strip() for x in re.split(r"[,;\n]", str(new.get("blocked_streamers", ""))) if x.strip())[:300]  # streamers that are never clipped
+    for k_, d_ in (("min_score_live", 6.0),):  # live-stream clips have their own minimum score (default 6)
+        try:
+            out[k_] = round(max(1.0, min(10.0, float(new.get(k_, old.get(k_, d_))))) * 2) / 2
+        except (TypeError, ValueError):
+            out[k_] = d_
     for k_ in ("run_source", "auto_source"):  # where clips come from: manual runs and Autopilot choose separately (videos / VODs or live streams)
         out[k_] = new.get(k_) if new.get(k_) in ("video", "live") else (old.get(k_) if old.get(k_) in ("video", "live") else "video")
     out["notify"] = bool(new.get("notify", False))  # optional Windows pop-ups (run finished, scheduled post done / failed)
@@ -725,7 +743,7 @@ def clip_words(d):
 LAYOUTS = ("blur", "facecam", "fill")
 
 
-def review_recut(stem, layout):
+def review_recut(stem, layout, nocaps=False):
     """Cut this clip again from its source with another crop (blurred background / webcam on top / fill the screen): same moment, same texts, same rating. The source video
     is downloaded again when it was cleaned up. Runs in the background (REVIEW_STATUS shows it); the clip stays as it was when anything fails."""
     def say(state, msg):
@@ -739,7 +757,7 @@ def review_recut(stem, layout):
             say("posting", "Re-cutting this clip: downloading the source again...")
             run(ytdlp_base(url) + ["-f", "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080]/b", "--merge-output-format", "mp4", "-o", str(src), url])
         say("posting", f"Re-cutting this clip ({layout})...")
-        caps = ["--captions", "none"] if (d.get("no_caps") or d.get("recut")) else []
+        caps = ["--captions", "none"] if (nocaps or d.get("no_caps") or d.get("recut")) else []
         r = subprocess.run([str(R / ".venv" / "Scripts" / "python.exe"), "scripts/cut.py", str(job), "--pick", str(pick), "--layout", layout, "--hook", d.get("hook", ""),
                             "--start", str(d["start"]), "--end", str(d["end"]), *caps], cwd=R, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800,
                            env={**os.environ, "PYTHONUTF8": "1", "CLIP_DESK_HOME": str(R)}, creationflags=0x08000000)
@@ -758,6 +776,8 @@ def review_recut(stem, layout):
             raise RuntimeError("Could not replace the video (is it playing in another window?)")
         for k in ("trim", "orig_seconds"):
             d.pop(k, None)
+        if nocaps:
+            d["no_caps"] = True  # the source has its own captions: Clippy's are left off from now on
         d["layout"] = layout; d["seconds"] = round(float(nj.get("end", d["end"])) - float(nj.get("start", d["start"])), 1)
         cj.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
         (REVIEW / (stem + ".orig")).unlink(missing_ok=True)
@@ -1166,7 +1186,7 @@ class H(http.server.BaseHTTPRequestHandler):
             c, posts = read_cfg(), read_posts()
             today = dt.date.today().isoformat()
             ok, why, mode = tick.decide(c, sched_posts(c), dt.datetime.now(), PAUSE.exists(), gap=bool(c.get("auto_post")))
-            log = LOG.read_text(encoding="utf-8")[-1500:] if LOG.exists() else ""
+            log = log_text()
             return self.send(200, json.dumps({"config": c, "paused": PAUSE.exists(), "checks": checks(),
                                               "today": [p for p in posts if p.get("date") == today and not p.get("deleted")], "log": log,
                                               "progress": progress(), "signin": signin_state(), "jobs_mb": cleanup.jobs_mb(), "all_languages": textutil.LANGS, "perf": perf(), "ai_keys": {p["id"]: secretstore.exists(f"key_{p['id']}") for p in c.get("ai_profiles", [])}, "blocked": blocked_msg(c), "live": live_status(),
@@ -1198,6 +1218,8 @@ class H(http.server.BaseHTTPRequestHandler):
             update_run(self.path.rsplit("/", 1)[1], wait=True)
         elif self.path == "/api/clearlog":
             (R / "autorun.log").write_text("", encoding="utf-8")
+            if (R / "live_watch.log").exists():
+                (R / "live_watch.log").write_text("", encoding="utf-8")
         elif self.path == "/api/custom":
             if PAUSE.exists():
                 return self.send(409, "Paused: press Resume first", "text/plain")
@@ -1329,13 +1351,13 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.send(400, str(e), "text/plain")
         elif self.path == "/api/review/recut":
             try:
-                body = json.loads(self.rfile.read(n)); stem = body["id"]; layout = body["layout"]; assert STEM.match(stem) and layout in LAYOUTS and (REVIEW / (stem + ".mp4")).exists()
+                body = json.loads(self.rfile.read(n)); stem = body["id"]; layout = body["layout"]; nocaps = bool(body.get("nocaps")); assert STEM.match(stem) and layout in LAYOUTS and (REVIEW / (stem + ".mp4")).exists()
             except Exception:
                 return self.send(400, "bad values", "text/plain")
             if (REVIEW_STATUS.get(stem) or {}).get("state") == "posting" or (R / "post.lock").exists():
                 return self.send(409, "Busy: wait until the current post or re-cut has finished", "text/plain")
             REVIEW_STATUS[stem] = {"state": "posting", "msg": "Re-cutting this clip..."}
-            threading.Thread(target=review_recut, args=(stem, layout), daemon=True).start()
+            threading.Thread(target=review_recut, args=(stem, layout, nocaps), daemon=True).start()
         elif self.path == "/api/review/rejoke":
             try:
                 stem = json.loads(self.rfile.read(n))["id"]; assert STEM.match(stem) and (REVIEW / (stem + ".mp4")).exists()

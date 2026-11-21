@@ -238,8 +238,18 @@ def main():
     a = ap.parse_args()
     d = job_dir(a.src + (f"#t{a.start}" if a.start else ""))
     vid, info = fetch(a.src, d, a.max_minutes, a.start)
-    dur = float(ffprobe(vid)["format"]["duration"])
+    dur = float((ffprobe(vid).get("format") or {}).get("duration") or 0)
     wav, db = audio_rms(vid, d)
+    if dur <= 0:  # some live recordings carry no length in their header (a broken or ad-interrupted recording): measure the audio instead
+        try:
+            with wave.open(str(wav)) as wf:
+                dur = wf.getnframes() / float(wf.getframerate())
+        except Exception:
+            dur = 0.0
+        if dur <= 0:
+            save_json(d / "candidates.json", {"source": str(vid), "info": load_json(d / "info.json"), "duration": 0, "candidates": [], "signals": {}})
+            print("job: " + str(d) + chr(10) + "this recording has no readable length: skipping it" + chr(10) + "0 candidates (0 strong)")
+            return
     n = len(db)
     words = transcribe(wav, d)
     lang = load_json(d / "lang.json") if (d / "lang.json").exists() else {"language": "en", "p": 1}

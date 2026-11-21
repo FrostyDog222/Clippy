@@ -72,8 +72,14 @@ def allowed_languages(cfg):
 
 
 # chat shock/hype reactions (strong) and mild laughter; "WTF"-type messages are what a real moment looks like in chat
-CHAT_SHOCK = re.compile(r"(\bWT[FH]\b|\bWHAT THE\b|\bOMG\b|\bOMFG\b|\bNO WAY\b|\bHOLY\b|\bBRO+\b|\bBRUH\b|\bI CANT\b|\bICANT\b|\bCLIP( IT)?\b|\bPOG(GERS|CHAMP)?\b|\bINSANE\b|\bCRAZY\b|\bDEAD\b|\bNOO+\b|\bWHAT\?+|\?!|!\?|💀|😭|🤯|😱|🔥)", re.I)
-CHAT_LAUGH = re.compile(r"(\bLMAO+\b|\bLOL\b|\bKEKW?\b|\bOMEGALUL\b|\bLUL\b|\bAHAHA|😂|🤣)", re.I)
+CHAT_SHOCK = re.compile(r"(\bWT[FH]\b|\bWHAT THE\b|\bOMG\b|\bOMFG\b|\bNO WAY\b|\bHOLY\b|\bBRO+\b|\bBRUH\b|\bI CANT\b|\bICANT\b|\bCLIP( IT)?\b|\bPOG(GERS|CHAMP)?\b|\bINSANE\b|\bCRAZY\b|\bDEAD\b|\bNOO+\b|\bWHAT\?+|\?!|!\?|💀|😭|🤯|😱|🔥|😮|🙀|\bWO+W+\b|\bPOGU\b|\bMONKA[SW]\b|\bNO PUEDE SER\b|\bMADRE M[IÍ]A\b|\bDIOS M[IÍ]O\b|\bJODER\b|\bQU[EÉ] LOCURA\b|\bMEU DEUS\b|\bMDS\b|\bCARAMBA\b|\bCARAC[AÁ]\b|\bN[AÃ]O ACREDITO\b|\bEITA\b|\bKRASS\b|\bDIGGA\b|\bWAHNSINN\b|\bOHA\b|\bPUTAIN\b|\bINCROYABLE\b|\bMON DIEU\b)", re.I)  # + shock in other languages
+CHAT_LAUGH = re.compile(r"(\bLMAO+\b|\bLOL\b|\bKEKW?\b|\bOMEGALUL\b|\bLUL\b|\bAHAHA|😂|🤣|😆|😹|\bja(ja)+j?\b|\bje(je)+\b|\bk{3,}\b|\brs(rs)+\b|\bha(ha)+h?\b|\bhe(he)+\b|\bp?t?mdr\b|\bx+d{2,}\b|\bLULW\b)", re.I)  # + laughter in Spanish, Portuguese, French, German...
+
+
+def stream_language_ok(lang, cfg):
+    """A live stream's language (en, pt, de... as the streamer set it on Twitch; '' = unknown) against the languages you picked in Settings: unknown is allowed."""
+    allowed = allowed_languages(cfg)
+    return not lang or allowed is None or str(lang).lower() in [a.lower() for a in allowed]
 
 
 def chat_weight(txt):

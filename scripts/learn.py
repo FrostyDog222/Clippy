@@ -17,10 +17,10 @@ MIN_TOTAL, MIN_GOOD, MIN_REST, MIN_RATED = 12, 3, 3, 6  # clips in total; 👍; 
 FULL_AT = 30  # rated clips at which the learning is fully trusted
 MEH_CAP, MEH_WEIGHT = 2, 0.3  # at most 2 meh clips per rated one, and each counts about a third of a clip that stood out
 MAX_NUDGE, MAX_CHANNEL = 1.5, 0.6
-KEYS = ["win", "frames", "ai", "score", "penalty", "seconds", "twitch", "views_log", "wps", "sig.loud", "sig.hype", "sig.motion", "sig.voice", "sig.laugh", "sig.swear",
+KEYS = ["win", "frames", "ai", "score", "penalty", "seconds", "twitch", "live", "views_log", "wps", "sig.loud", "sig.hype", "sig.motion", "sig.voice", "sig.laugh", "sig.swear",
         "sig.novel", "sig.rate", "sig.chat", "sig.game"]
 LABELS = {"win": "the AI's funny / watchable score", "frames": "what the frames show", "ai": "the AI window score", "score": "the energy of the moment", "penalty": "few quality penalties",
-          "seconds": "longer clips", "twitch": "clips viewers made on Twitch", "views_log": "popular sources", "wps": "fast talking", "sig.loud": "loud moments",
+          "seconds": "longer clips", "twitch": "clips viewers made on Twitch", "live": "clips from live streams", "views_log": "popular sources", "wps": "fast talking", "sig.loud": "loud moments",
           "sig.hype": "hype words", "sig.motion": "action on screen", "sig.voice": "an excited voice", "sig.laugh": "laughter", "sig.swear": "swearing",
           "sig.novel": "unusual / glitchy things", "sig.rate": "fast speech", "sig.chat": "chat reactions", "sig.game": "talk about the game"}
 
