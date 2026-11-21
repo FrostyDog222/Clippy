@@ -799,6 +799,28 @@ def test_live_swap_helpers():
     assert lw.pick_other(found2, [w], {"u2": 9e12}, "old") is None                      # nor one that was just swapped out
 
 
+def test_stream_language_is_checked_for_youtube_too():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent)); sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import live_watch as lw
+    cfg = {"languages": ["en"]}
+    lw.LANG_CACHE.update({"t1": {"language": "en", "p": 0.95}, "t3": {"language": "ro", "p": 0.9}})
+    assert lw.stream_language_allowed({"platform": "Twitch", "url": "t1", "channel": "a", "lang": "en"}, cfg)
+    assert not lw.stream_language_allowed({"platform": "Twitch", "url": "t2", "channel": "b", "lang": "ro"}, cfg)       # the tag says Romanian: no need to listen
+    assert not lw.stream_language_allowed({"platform": "Twitch", "url": "t3", "channel": "g", "lang": "en"}, cfg)       # tagged English but the speech is Romanian: the speech wins
+    lw.LANG_CACHE.update({"y1": {"language": "ro", "p": 0.93}, "y2": {"language": "en", "p": 0.97}, "y3": {}, "y4": {"language": "ro", "p": 0.3}})
+    assert not lw.stream_language_allowed({"platform": "YouTube", "url": "y1", "channel": "c"}, cfg)       # YouTube has no language field: the speech decides
+    assert lw.stream_language_allowed({"platform": "YouTube", "url": "y2", "channel": "d"}, cfg)
+    assert lw.stream_language_allowed({"platform": "YouTube", "url": "y3", "channel": "e"}, cfg)           # could not be told: allowed
+    assert lw.stream_language_allowed({"platform": "YouTube", "url": "y4", "channel": "f"}, cfg)           # not sure enough: allowed
+    assert lw.stream_language_allowed({"platform": "YouTube", "url": "y1", "channel": "c"}, {"languages": "any"})
+    from types import SimpleNamespace as NS
+    found = [{"url": "y1", "channel": "Ro"}, {"url": "y2", "channel": "En"}]
+    cool = {}
+    for _ in range(5):                                                                                   # (the pick is random: whatever the order, never the Romanian one)
+        assert lw.pick_other(found, [], {}, "x", lambda s: lw.stream_language_allowed(s, cfg))["channel"] == "En"
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

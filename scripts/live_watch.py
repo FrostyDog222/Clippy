@@ -141,6 +141,33 @@ def stream_ended(url):
         return False
 
 
+LANG_CACHE = {}  # stream url -> {"language", "p"} (or {} = could not be told), for this session
+
+
+def stream_language_allowed(s, cfg):
+    """Is the speech on this live stream in a language you picked in Settings? Twitch's language tag is checked first (fast), then Clippy listens to about 20 seconds of the
+    stream once (YouTube has no tag at all). When it cannot tell, the stream is allowed."""
+    allowed = autorun.textutil.allowed_languages(cfg)
+    if allowed is None:
+        return True
+    if s.get("lang") and not autorun.textutil.stream_language_ok(s["lang"], cfg):  # the language the streamer set says no: no need to listen
+        return False
+    url = s["url"]  # the tag can be wrong (a streamer who left it on English): Clippy also listens to the stream once, and the speech has the last word
+    if url not in LANG_CACHE:
+        try:
+            r = subprocess.run([PY, "scripts/stream_lang.py", url], cwd=R, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=150, creationflags=NOWIN)
+            LANG_CACHE[url] = json.loads(r.stdout.strip().splitlines()[-1])
+        except Exception:
+            LANG_CACHE[url] = {}
+    L = LANG_CACHE[url]
+    if not L or float(L.get("p") or 0) < 0.5:
+        return True
+    ok = str(L.get("language", "")).lower() in [a.lower() for a in allowed]
+    if not ok:
+        log(f"  not watching {s['channel']}: the speech is {L.get('language')} ({L.get('p')}), not in your languages")
+    return ok
+
+
 def parse_target(to):
     """What the user typed under 'switch to': a link to a stream, or just a streamer name (taken as a Twitch name) -> (platform, url), or None when it is not usable."""
     to = (to or "").strip()
@@ -170,14 +197,19 @@ def lookup_live(platform, url, cfg):
         return None
 
 
-def pick_other(found, watches, cooldown, avoid_url):
+def pick_other(found, watches, cooldown, avoid_url, lang_ok=lambda s: True):
     """A random live stream (from the trending / your list search, the same rules as always) that is not watched, for 'replace this one with something else'.
     Streams on your list are preferred when one is live; otherwise a random one of the best few."""
     free = [s for s in found if s["url"] != avoid_url and cooldown.get(s["url"], 0) <= time.time()
             and not any(norm(w.s["channel"]) == norm(s["channel"]) for w in watches)]
     mine = [s for s in free if s.get("creator")]
-    pool = mine or free[:8]
-    return random.choice(pool) if pool else None
+    pool = list(mine or free[:8])
+    random.shuffle(pool)
+    for s in pool[:4]:  # the language is checked before a stream is taken (a streamer in the wrong language is skipped and not tried again)
+        if lang_ok(s):
+            return s
+        cooldown[s["url"]] = time.time() + 6 * 3600
+    return None
 
 
 def pick_victim(watches, cand, now=None):
@@ -287,7 +319,7 @@ def main():
                         if not new:
                             last = f"could not switch {old.s['channel']}: {to[:40]} is not live right now (or is not a streamer name or stream link)"; log("  " + last); continue
                     else:
-                        new = pick_other(discover(cfg), watches, cooldown, old.url)
+                        new = pick_other(discover(cfg), watches, cooldown, old.url, lambda s_: stream_language_allowed(s_, cfg))
                         if not new:
                             last = f"no other live stream found to replace {old.s['channel']}: kept"; log("  " + last); continue
                     watches.remove(old); old.stop(); cooldown[old.url] = time.time() + 3 * 3600
@@ -316,8 +348,12 @@ def main():
                         v = None if swapped else pick_victim(watches, s)
                         if not v:
                             continue
+                        if not stream_language_allowed(s, cfg):
+                            cooldown[s["url"]] = time.time() + 6 * 3600; continue
                         swapped = True; watches.remove(v); v.stop(); have.discard(v.url); cooldown[v.url] = time.time() + 1800
                         log(f"swapping {v.s['channel']} (no chat spike for {int((time.time() - v.last_spike) // 60)} min) for {s['channel']} ({s.get('viewers')} viewers{', on your list' if s.get('creator') else ''})")
+                    if len(watches) < maxn and not stream_language_allowed(s, cfg):
+                        cooldown[s["url"]] = time.time() + 6 * 3600; continue
                     log(f"watching {s['platform']} {s['channel']} ({s.get('viewers')} viewers): {s['title'][:60]}")
                     watches.append(Watch(s)); have.add(s["url"])
             for w in watches:
