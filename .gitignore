@@ -36,3 +36,19 @@ PAUSED.txt
 *.m4a
 *.ts
 *.npy
+
+# what Clippy learned from one user: private, never uploaded (ratings, learned model, views, duplicate memory)
+ratings.jsonl
+learned_weights.json
+views.jsonl
+seen_moments.jsonl
+# more local state
+yt_limit.json
+autopilot_hold.txt
+update_state.json
+update_backup/
+version.json
+live_status.json
+.no_update
+netguard.log
+clippy-backup-*.json
