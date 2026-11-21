@@ -188,10 +188,27 @@ def resume_run():
     SUSP.unlink(missing_ok=True); PAUSE.unlink(missing_ok=True)
 
 
+HOLD = R / "autopilot_hold.txt"  # after "Stop now": Autopilot stays ON but waits before its next automatic run
+HOLD_MIN = 20
+
+
+def hold_active():
+    try:
+        return time.time() < float(HOLD.read_text())
+    except (OSError, ValueError):
+        return False
+
+
+def failed_run_switches_autopilot_off(p):
+    """A run that FAILED switches Autopilot off (no blind retrying); a run YOU stopped does not."""
+    return bool(p) and p["pct"] < 0 and not str(p.get("msg", "")).startswith("Stopped by you")
+
+
 def stop_runs():
     """Stop now: kill the run and everything it started (downloads, analysis, cutting, uploads) for good: there is no resuming it (that is what Pause is for).
-    Autopilot and live mode are switched off so nothing starts again by itself."""
-    c = read_cfg(); c["autopilot"] = False; c["live_watch"] = False; save_cfg(c)
+    Autopilot stays ON (it is your switch) but waits HOLD_MIN minutes before its next automatic run, so Stop is not undone a minute later; live mode is switched off."""
+    c = read_cfg(); c["live_watch"] = False; save_cfg(c)
+    HOLD.write_text(str(time.time() + HOLD_MIN * 60))
     try:  # the whole tree under the run (moments, yt-dlp, ffmpeg ... even the ones the name search below cannot see)
         subprocess.run(["taskkill", "/PID", str(_run_pid()), "/T", "/F"], creationflags=NOWIN, capture_output=True)
     except Exception:
@@ -206,7 +223,7 @@ def stop_runs():
         if (s or {}).get("state") == "posting":
             s.update(state="error", msg="Stopped by you.")
     PAUSE.unlink(missing_ok=True)
-    set_prog(-1, "Stopped by you: the run was ended (it cannot be resumed; press Run one now to start a new one)")
+    set_prog(-1, "Stopped by you: the run was ended (it cannot be resumed; press Run now to start a new one)" + (f". Autopilot stays ON and starts its next run in about {HOLD_MIN} minutes." if c.get("autopilot") else ""))
 
 
 CUSTOM_URL = re.compile(r"^https://((www\.|m\.)?youtube\.com/(watch\?v=|shorts/|live/)[\w-]{6,}|youtu\.be/[\w-]{6,}|(www\.)?twitch\.tv/videos/\d+|clips\.twitch\.tv/[\w-]+|(www\.)?twitch\.tv/\w+/clip/[\w-]+)([&?#/][^\s]*)?$")
@@ -402,8 +419,10 @@ def autopilot_loop():
                 continue
             if blocked_msg(c):  # list emptied (or trending switched off) while running: stop the bot
                 c["autopilot"] = False; save_cfg(c); continue
-            if p and p["pct"] < 0:  # last run failed or was stopped: switch off instead of retrying blindly
+            if failed_run_switches_autopilot_off(p):  # last run failed: switch off instead of retrying blindly (a run you stopped does not switch it off)
                 c["autopilot"] = False; save_cfg(c); continue
+            if hold_active():  # you pressed Stop now a few minutes ago
+                continue
             if running() or c.get("live_watch"):  # live mode ON: the live watcher posts, videos are not used
                 continue
             if c.get("auto_post"):

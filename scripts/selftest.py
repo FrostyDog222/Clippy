@@ -480,6 +480,23 @@ def test_start_with_windows_is_off_unless_autopilot_is_on():
             d.autostart_set(False); d.AUTOSTART_NAME = keep
 
 
+def test_stop_now_keeps_autopilot_on():
+    import sys, time as tm, tempfile
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    assert not d.failed_run_switches_autopilot_off(None)
+    assert not d.failed_run_switches_autopilot_off({"pct": 40, "msg": "Working"})
+    assert not d.failed_run_switches_autopilot_off({"pct": -1, "msg": "Stopped by you: the run was ended"})   # you stopped it: Autopilot stays on
+    assert d.failed_run_switches_autopilot_off({"pct": -1, "msg": "Partly posted: daily upload limit"})        # a real failure still switches it off
+    keep = d.HOLD; d.HOLD = Path(tempfile.mkdtemp()) / "hold.txt"
+    try:
+        assert not d.hold_active()
+        d.HOLD.write_text(str(tm.time() + 600)); assert d.hold_active()
+        d.HOLD.write_text(str(tm.time() - 5)); assert not d.hold_active()
+    finally:
+        d.HOLD = keep
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""
