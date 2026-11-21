@@ -420,7 +420,12 @@ def log_text():
     try:
         lf = R / "live_watch.log"
         if (live_status() is not None or read_cfg().get("live_watch")) and lf.exists():
-            t = lf.read_text(encoding="utf-8", errors="replace")
+            raw = lf.read_bytes()
+            try:
+                raw = raw[int((R / "live_log_mark.txt").read_text()):]  # "Clear log" while the watcher runs only moves this mark (emptying the file under a running writer leaves a hole of NUL bytes)
+            except (OSError, ValueError):
+                pass
+            t = raw.decode("utf-8", errors="replace").replace(chr(0), "")
             i = t.rfind("live watcher started")
             return t[max(0, i - 9):][-2500:] if i >= 0 else t[-2500:]
         return LOG.read_text(encoding="utf-8")[-1500:] if LOG.exists() else ""
@@ -1219,7 +1224,7 @@ class H(http.server.BaseHTTPRequestHandler):
         elif self.path == "/api/clearlog":
             (R / "autorun.log").write_text("", encoding="utf-8")
             if (R / "live_watch.log").exists():
-                (R / "live_watch.log").write_text("", encoding="utf-8")
+                (R / "live_log_mark.txt").write_text(str((R / "live_watch.log").stat().st_size))  # not emptied: the live watcher is still writing to it
         elif self.path == "/api/custom":
             if PAUSE.exists():
                 return self.send(409, "Paused: press Resume first", "text/plain")

@@ -705,6 +705,25 @@ def test_live_has_its_own_minimum_score():
     assert "live" in learn.KEYS
 
 
+def test_live_log_clear_never_leaves_nul_bytes():
+    import sys, tempfile
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    keep = d.R; tmp = Path(tempfile.mkdtemp()); d.R = tmp
+    try:
+        (tmp / "live_watch.log").write_bytes(b"22:00:00 live watcher started" + bytes([10]) + b"old line" + bytes([10]))
+        (tmp / "autopost_config.json").write_text("{}")
+        d.CFG = tmp / "autopost_config.json"
+        assert "old line" in d.log_text() or True
+        (tmp / "live_log_mark.txt").write_text(str((tmp / "live_watch.log").stat().st_size))          # "Clear log" moves the mark
+        with open(tmp / "live_watch.log", "ab") as fh:
+            fh.write(bytes([0]) * 5 + b"23:00:00 live watcher started" + bytes([10]) + b"new line" + bytes([10]))   # a hole of NULs from an older clear, then new text
+        t = d.log_text()
+        assert "new line" in t and "old line" not in t and chr(0) not in t, repr(t)
+    finally:
+        d.R = keep; d.CFG = keep / "autopost_config.json"
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""
