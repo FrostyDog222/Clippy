@@ -117,7 +117,7 @@ def refine_window(cfg, words, start, end, max_len, min_len=12):
     prompt = (f"You edit a vertical Short from a {TOPIC_NAME} stream. Below is the speech transcript (the streamer and the game audio) with timestamps in seconds; gaps between lines are "
               f"silence. The current cut is {start:.1f}-{end:.1f}. Decide where this self-contained bit really begins and ends: setup, punchline or reaction, and the beat after it. "
               "Silence is NOT the end: a quiet pause is often the beat before the next joke or an awkward reaction. Keep going while the same joke, topic or event continues, even "
-              f"after a pause of several seconds, and stop where the topic clearly changes or the energy is gone. The length must be between {min_len} and {max_len} seconds. "
+              f"after a pause of several seconds, and stop where the topic clearly changes or the energy is gone. The length must be between {min_len} and {max_len} seconds, and tighter is better: aim for 20-40 seconds and go longer only when the same bit really keeps going (never pad with calm talk). "
               "Start about 1-2 seconds before the first relevant word and end about 1 second after the last relevant word or reaction. "
               'Also judge the bit: "score" 1-10 = how worth watching it is for a stranger who scrolls Shorts: funny catches the eye most, so a genuinely funny moment scores highest (8-10), but it does not have to be funny: interesting, tense, surprising, impressive, absurd, emotional or relatable also count (6-8). Something must really happen or be said. Game dialogue with no reaction, plain narration or a calm explanation is 3 or lower, and so is random chatter with no point'
               '(a scripted cutscene monologue is about 3); "standalone": true when it makes sense without having watched the rest of the video; "speaker": "streamer" when the streamer is '
@@ -160,8 +160,10 @@ def refine_window(cfg, words, start, end, max_len, min_len=12):
     if ends:
         we, nxt = min(ends, key=lambda t: abs(t[0] - e))
         e2 = we + min(1.0, max(0.4, nxt - we - 0.15))  # let the reaction land (up to 1 s after the last word) but never start the next sentence
-    if e2 - s2 > max_len + 1:
-        e2 = s2 + max_len
+    if e2 - s2 > max_len:  # over the limit: end on the last complete sentence that fits, never in the middle of one
+        fits = [w["e"] for i, w in enumerate(words) if s2 + min_len <= w["e"] <= s2 + max_len - 0.6
+                and (w["w"].strip().endswith((".", "?", "!")) or (words[i + 1]["s"] - w["e"] > 0.6 if i + 1 < len(words) else True))]
+        e2 = min(s2 + max_len, fits[-1] + 0.5) if fits else s2 + max_len
     try:
         score = float(j.get("score", 5) or 5)
     except (TypeError, ValueError):

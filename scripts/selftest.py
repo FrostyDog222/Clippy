@@ -38,6 +38,17 @@ def test_bit_boundaries():
         assert 100.5 < r["end"] <= 101.3, r  # ends 0.4-1 s after the last word, not on it
 
 
+def test_over_limit_ends_on_a_sentence():
+    w, t = [], 100.0
+    for _ in range(14):
+        for x in "one two three four five six".split():
+            w.append({"w": x if x != "six" else "six.", "s": t, "e": t + 0.4}); t += 0.7
+        t += 0.8
+    ai_title.complete_cfg = lambda *a, **k: '{"start": 100.0, "end": 141.0, "score": 8, "standalone": true, "speaker": "streamer", "risky": false, "why": "x"}'
+    r = ai_check.refine_window({"title_writer": "api"}, w, 100, 141, 40, 12)
+    assert r and r["end"] - r["start"] <= 40 and abs(r["end"] - 139.4) < 0.1, r  # the last full sentence that fits, not a cut at the limit
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""
