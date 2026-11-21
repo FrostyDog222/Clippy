@@ -511,6 +511,7 @@ def clean(new, old):
     out["creators"] = [str(s)[:60] for s in new["creators"]][:50]
     out["use_trending_fallback"] = bool(new["use_trending_fallback"])
     out["trending_any"] = bool(new.get("trending_any", False))
+    out["time_format"] = new.get("time_format") if new.get("time_format") in ("12", "24") else "12"  # 12-hour (US) or 24-hour (Europe) times and dates
     out["display_name"] = re.sub(r"\s+", " ", str(new.get("display_name", ""))).strip()[:40]  # the name in the welcome line
     out["auto_clips_per_run"] = max(1, min(10, int(new.get("auto_clips_per_run", 1) or 1)))  # clips per automatic (Autopilot) run; the manual "clips this run" is saved right away by /api/clips
     out["blocked_streamers"] = ", ".join(x.strip() for x in re.split(r"[,;\n]", str(new.get("blocked_streamers", ""))) if x.strip())[:300]  # streamers that are never clipped
