@@ -208,7 +208,7 @@ def test_removed_clips_teach_meh():
         for st in (meh, rated, posted, nosig):
             remove(st)
         rows = [json.loads(x) for x in (tmp / "ratings.jsonl").read_text().splitlines()]
-        assert [(r["id"], r["rating"], r.get("removed")) for r in rows] == [(meh, 0, True)], rows  # only the unrated, unposted clip with signals
+        assert [(r["id"], r["rating"], r.get("removed")) for r in rows] == [(meh, 0, True), (rated, 1, True)], rows  # the unrated, unposted clip (meh) and the rated one (its rating is written down again); not the posted / signal-less ones
     finally:
         srv.shutdown(); d.R, d.REVIEW = keep
 
@@ -652,6 +652,29 @@ def test_clips_you_looked_at_do_not_count_as_waiting():
         assert len(d.waiting_clips(include_reviewed=True)) == 5   # the day's quota of prepared clips still counts them all
     finally:
         d.REVIEW = keep
+
+
+def test_removing_a_rated_clip_keeps_what_clippy_learned():
+    import sys, json, tempfile
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent)); sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import dashboard as d, learn
+    keep = (d.R, d.REVIEW, d.learn_refit, learn.R, learn.W_FILE)
+    tmp = Path(tempfile.mkdtemp()); (tmp / "review").mkdir()
+    d.R, d.REVIEW, d.learn_refit, learn.R, learn.W_FILE = tmp, tmp / "review", (lambda: None), tmp, tmp / "w.json"
+    try:
+        feats = {"win": 8.0, "score": 6.0, "channel": "someone"}
+        def clip(i, **extra):
+            st = f"17960000{i:02d}__clip_1"; (d.REVIEW / f"{st}.mp4").write_bytes(b"x"); (d.REVIEW / f"{st}.json").write_text(json.dumps({"rank": 9, "features": feats, **extra})); return st
+        up, down, neutral, plain = clip(1, rating=1, reviewed=True), clip(2, rating=-1, reviewed=True), clip(3, rating=0, reviewed=True), clip(4)
+        for st in (up, down):                                   # rated the normal way: written to ratings.jsonl at once
+            d.log_rating(st, json.loads((d.REVIEW / f"{st}.json").read_text()), json.loads((d.REVIEW / f"{st}.json").read_text())["rating"])
+        for st in (up, down, neutral, plain):
+            d.review_remove(st)                                  # the user deletes every clip
+        assert not list(d.REVIEW.glob("*.mp4"))
+        got = {r["id"]: r["rating"] for r in learn.load()}       # what Clippy still remembers
+        assert got[up] == 1 and got[down] == -1 and got[neutral] == 0 and got[plain] == 0, got
+    finally:
+        d.R, d.REVIEW, d.learn_refit, learn.R, learn.W_FILE = keep
 
 
 def test_titles_survive_bad_on_video_text():

@@ -696,7 +696,9 @@ def review_remove(stem):
         cf, pf = REVIEW / (stem + ".json"), REVIEW / (stem + ".posted.json")
         d = json.loads(cf.read_text(encoding="utf-8")) if cf.exists() else {}
         posted = pf.exists() and any(json.loads(pf.read_text(encoding="utf-8")).values())
-        if d.get("features") and not d.get("rating") and not posted:
+        if d.get("features") and (d.get("rating") in (1, -1) or d.get("reviewed")):
+            log_rating(stem, d, d.get("rating") or 0, removed=True); learn_refit()  # you rated it (👍 / 😐 / 👎): that rating is written down again before the clip goes, so Clippy keeps learning from it for good
+        elif d.get("features") and not d.get("rating") and not posted:
             log_rating(stem, d, 0, removed=True); learn_refit()
     except Exception:
         pass
