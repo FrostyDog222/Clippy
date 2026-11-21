@@ -13,6 +13,10 @@ You choose a topic (a game or anything: "GTA 6", "Minecraft", "Elden Ring"), a l
 - **Ready to post:** every finished clip waits in the dashboard with a preview. Edit the title, description, hashtags and TikTok caption, then press Post (private or public). *Auto post* is OFF by default.
 - **Control:** Pause (freezes the running job, Resume continues it), Stop now, a live log with timestamps, and a time estimate.
 
+## AI is optional
+
+Clippy does not require an AI provider. AI integration is optional, and users can configure their own provider or local LLM. No AI credentials or user data are routed through the developer.
+
 ## Requirements
 
 Windows 10 or 11, Google Chrome, Python 3.10+, ffmpeg and a JavaScript runtime for yt-dlp (Deno or Node.js). `setup.bat` checks for each and offers to install what is missing with winget.
