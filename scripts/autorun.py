@@ -136,7 +136,7 @@ def usable(e):
     return {"id": e["id"], "title": t, "channel": e.get("channel") or e.get("uploader") or "?", "duration": e["duration"], "views": e.get("view_count") or 0}
 
 
-def search_creator(creator):
+def search_creator(creator, days=3):
     out = []
     for e in flat_search(TP["creator_query"](creator)):
         ch = e.get("channel") or e.get("uploader") or ""
@@ -145,7 +145,7 @@ def search_creator(creator):
             if v:
                 out.append(v)
     out = sorted(out, key=lambda x: (x["duration"] > 3 * 3600, -x["views"]))[:8]  # the caller drops used/rejected ones, so look a bit further down the list
-    return [v for v in out if recent(v["id"])]
+    return [v for v in out if recent(v["id"], days)]
 
 
 def search_twitch_clips(skip_ids):
@@ -158,6 +158,23 @@ def search_twitch_clips(skip_ids):
             continue
         out.append({**c, "twitch": True})
     return out[:6]
+
+
+def creator_twitch_clips(creator, skip_ids):
+    """Clips viewers made on this streamer's own Twitch channel this week (already picked by viewers: usually the best moments, and quick to process),
+    on the topic when one is set, most viewed first."""
+    import twitch
+    def on_topic(game):
+        g = (game or "").lower()
+        if TP["any"] or not g:
+            return True
+        return ("grand theft auto vi" in g or "gta vi" in g) if TP["gta"] else TP["name"].lower() in g
+    out = []
+    for c in twitch.channel_clips(creator, 15):
+        if c["id"] in skip_ids or BANNED.search(c["title"]) or not (15 <= c["duration"] <= 60) or c["views"] < 100 or not on_topic(c.get("game")):
+            continue
+        out.append({**c, "twitch": True})
+    return out[:3]
 
 
 def search_trending(skip_channels, skip_ids):
@@ -354,7 +371,8 @@ def judge(v, score, job, n, c, creator):
     if strict and ORIGIN != "live" and score < 5.0:  # the viral score (voice, laughter, swearing, action, chat...): 5+ = clearly strong
         if score < 4.0:
             log(f"  viral score {score} is far below the bar, skipping"); return None
-        pen.append((1.0, f"viral score {score} is under 5"))
+        if not v.get("twitch"):  # a clip viewers made is already a moment people picked: the energy score does not need to prove it
+            pen.append((1.0, f"viral score {score} is under 5"))
     if COMPILATION.search(v.get("title", "")):  # a compilation is already edited (changing webcam layout, cuts mid-moment) and is the "reused content" risk
         pen.append((1.5, "source is a compilation"))
     try:  # licensed music in the clip (Content ID / takedown risk): the transcript shows it as music notes or [Music]
@@ -365,6 +383,7 @@ def judge(v, score, job, n, c, creator):
         pass
     cut_range = []
     win = None
+    bonus = 0.0
     scene, win_score, res_score = None, None, None
     if CFG.get("title_writer") in ("claude", "api"):  # an AI reads what is said (silences included) and finds where the bit really starts and ends
         try:
@@ -374,8 +393,9 @@ def judge(v, score, job, n, c, creator):
         except Exception as e:
             win = None; log(f"  AI bit finder unavailable ({str(e)[:60]})")
         if not win and strict and ORIGIN != "live" and CFG.get("title_writer") == "api":  # nothing real judged this moment (no AI answer): the local score alone is not enough
-            pen.append((1.0, "no AI read of what is said"))
-        if not win and str((c.get("why") or [""])[0]).startswith("ranked by the AI"):  # a raw window the bit finder could not trim (often a minute of stream): only a fallback
+            if not v.get("twitch"):
+                pen.append((1.0, "no AI read of what is said"))
+        if not win and not v.get("twitch") and str((c.get("why") or [""])[0]).startswith("ranked by the AI"):  # a raw window the bit finder could not trim (often a minute of stream): only a fallback
             pen.append((2.0, "untrimmed AI window"))
         if win:
             ws, we = win["start"], win["end"]
@@ -386,11 +406,13 @@ def judge(v, score, job, n, c, creator):
                     log("  the AI rates this bit as weak, skipping"); return None
                 if win["score"] < 6:
                     pen.append((0.5 * (6 - win["score"]), f"bit scored {win['score']:g}/10"))
-                if win["speaker"] == "game" and win["score"] < 7:
-                    pen.append((1.0, "game-only dialogue"))
+                if win["speaker"] == "game":  # the streamer's reaction matters more than what happens in the game
+                    pen.append((2.0, "game-only dialogue, the streamer is not reacting"))
                 if not win["standalone"] and win["score"] < 6:
                     pen.append((1.0, "not standalone"))
             win_score = win["score"]
+            if win["speaker"] in ("streamer", "mixed"):
+                bonus += 0.5  # the streamer reacting is what makes the clip
             c = {**c, "start": ws, "end": we, "text": " ".join(w["w"] for w in allw if ws <= w["s"] < we)[:400]}
             cut_range = ["--start", f"{ws:.2f}", "--end", f"{we:.2f}"]
     if CFG.get("title_writer") in ("claude", "api"):  # an AI looks at 3 frames of the moment: skips non-GTA / nothing-happening moments, tells the title writer what happens
@@ -411,10 +433,13 @@ def judge(v, score, job, n, c, creator):
             if ORIGIN == "live" or not res.get("gta") or (res.get("score") or 0) <= 3:  # clearly not the topic / nothing happening: out
                 log(f"  AI frame check: skipping ({res['reason']})"); return None
             pen.append((2.0, f"frame check: {res['reason'][:60]}"))  # the 3 frames are a weak judge: a penalty, not a veto
-        if res.get("cutscene") and ORIGIN != "live" and (res.get("score") or 0) < 7:  # a cutscene can be funny, but a plain one needs a clearly funny rating
-            if (res.get("score") or 0) < 6:
-                log(f"  AI frame check: plain cutscene rated {res.get('score')}/10, skipping ({res.get('what', '')[:70]})"); return None
-            pen.append((1.5, "plain cutscene"))
+        if res.get("cutscene") and ORIGIN != "live":  # a cutscene is only a clip when the streamer reacts to it (a funny reaction), never the scripted dialogue alone
+            sg = c.get("sig") or {}
+            reacts = bool(win and win["speaker"] != "game") or sg.get("voice", 0) > 1 or sg.get("laugh", 0) > 0.5 or sg.get("swear", 0) > 0.5 or bool(v.get("twitch"))
+            if not reacts:
+                if (res.get("score") or 0) < 6:
+                    log(f"  AI frame check: cutscene without a streamer reaction rated {res.get('score')}/10, skipping ({res.get('what', '')[:70]})"); return None
+                pen.append((2.5, "cutscene without a streamer reaction"))
         scene = res["what"] or None
         res_score = res.get("score") if res.get("ok") is not None else None
         log(f"  AI saw: {scene}" if scene else f"  AI frame look not possible ({res['reason']})")
@@ -436,11 +461,11 @@ def judge(v, score, job, n, c, creator):
         pass
     ai = [x for x in (win_score, res_score, c.get("ai")) if x is not None]
     adj = (sum(ai) / len(ai) if ai else 5.0) - sum(p for p, _ in pen)
-    rank = adj + score * 0.3  # AI judgement first (minus penalties), the local viral score second
+    rank = adj + score * 0.3 + bonus  # AI judgement first (minus penalties, plus a bonus when the streamer reacts), the local viral score second
     if pen:
         log("  penalties: " + "; ".join(f"-{p:g} {w}" for p, w in pen) + f" -> rank {rank:.1f}")
     feat = {"win": win_score, "frames": res_score, "ai": c.get("ai"), "score": score, "penalty": round(sum(p for p, _ in pen), 2), "sig": c.get("sig"), "why": c.get("why"),
-            "notes": [f"-{p:g} {w}" for p, w in pen], "bit": (win or {}).get("why"), "scene": scene}  # notes/bit/scene: shown in the dashboard score tooltip
+            "notes": [f"-{p:g} {w}" for p, w in pen] + ([f"+{bonus:g} the streamer reacts"] if bonus else []), "bit": (win or {}).get("why"), "scene": scene}  # notes/bit/scene: shown in the dashboard score tooltip
     return {"c": c, "cut_range": cut_range, "scene": scene, "rank": rank, "weak": adj < 4.5, "feat": feat}  # weak = only a fallback for a run that would otherwise find nothing
 
 
@@ -729,7 +754,14 @@ def _main():
         progress(10 + ci * 2, f"Looking for {creator}")
         log(f"creator: {creator}")
         vids = [v for v in search_creator(creator) if v["id"] not in skip_ids][:3]
-        log(f"  {len(vids)} candidate videos")
+        if len(vids) < 2:  # few fresh videos: look a few days further back so there are more options
+            vids = [v for v in search_creator(creator, 7) if v["id"] not in skip_ids][:3]
+        try:  # the streamer's own Twitch clips (picked by viewers) come first: quick to process and usually the best moments
+            tw = creator_twitch_clips(creator, skip_ids)
+        except Exception as e:
+            tw = []; log(f"  Twitch clips unavailable ({str(e)[:60]})")
+        vids = tw + vids
+        log(f"  {len(tw)} Twitch clips + {len(vids) - len(tw)} videos to look at")
         code = try_videos(vids, st, sf, a.dry, 25, creator)
         if code is not None:
             return code

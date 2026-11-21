@@ -75,6 +75,31 @@ def top_clips(game=None, limit=10, period="LAST_DAY"):
     return sorted(out, key=lambda x: -x["views"])
 
 
+_Q_USERCLIPS = """query($login:String!,$n:Int!,$p:ClipsPeriod){ user(login:$login){ displayName clips(first:$n, criteria:{period:$p, sort:VIEWS_DESC}){ edges{ node{
+ slug title viewCount durationSeconds createdAt url broadcaster{ displayName } game{ displayName } } } } } }"""
+
+
+def channel_clips(name, limit=15, period="LAST_WEEK"):
+    """The most viewed clips viewers made on ONE streamer's channel (same free web endpoint as top_clips). The channel login is guessed from the name
+    ('CaseOh' -> caseoh, then caseoh_); rows like top_clips plus the game. Empty list when the channel is not found or on any problem."""
+    import re
+    base = re.sub(r"[^a-z0-9_]", "", str(name).lower())
+    for login in dict.fromkeys((base, base + "_")):
+        if not login:
+            continue
+        try:
+            u = (gql(_Q_USERCLIPS, {"login": login, "n": limit, "p": period}).get("data") or {}).get("user")
+        except Exception as e:
+            print(f"twitch channel clips failed: {e}", file=sys.stderr); continue
+        edges = ((u or {}).get("clips") or {}).get("edges") or []
+        if edges:
+            out = [{"id": "tw:" + n["slug"], "url": n["url"], "title": n.get("title") or "", "channel": (n.get("broadcaster") or {}).get("displayName") or name,
+                    "duration": n.get("durationSeconds") or 0, "views": n.get("viewCount") or 0, "game": (n.get("game") or {}).get("displayName") or ""}
+                   for n in (e["node"] for e in edges)]
+            return sorted(out, key=lambda x: -x["views"])
+    return []
+
+
 def top_streams(game="Grand Theft Auto VI", limit=20):
     """Live streams of a Twitch category, sorted by viewers (desc). Empty list if the category is unknown/offline."""
     names = [game]
