@@ -171,7 +171,7 @@ def search_twitch_clips(skip_ids):
     return out[:6]
 
 
-def creator_twitch_clips(creator, skip_ids):
+def creator_twitch_clips(creator, skip_ids, top=3):
     """Clips viewers made on this streamer's own Twitch channel this week (already picked by viewers: usually the best moments, and quick to process),
     on the topic when one is set, most viewed first."""
     import twitch
@@ -185,7 +185,7 @@ def creator_twitch_clips(creator, skip_ids):
         if c["id"] in skip_ids or BANNED.search(c["title"]) or not (15 <= c["duration"] <= 60) or c["views"] < 100 or not on_topic(c.get("game")):
             continue
         out.append({**c, "twitch": True})
-    return out[:3]
+    return out[:top]
 
 
 def search_trending(skip_channels, skip_ids):
@@ -802,19 +802,41 @@ def _main():
     if not a.creator:  # the --creator test flag ignores the daily per-creator limit
         creators = [c for c in creators if not any(norm(c) in d or d in norm(c) for d in skip_ch)]
     skip_ids = set(st["used_video_ids"]) | set(st["rejected"]) | review_ids()
-    # 1) the user's list, in order
+    # 0) Twitch first: clips the streamers' own audiences made (already picked by viewers), from every streamer on the list plus trending, most viewed first
+    pool = []
+    for creator in creators[:10]:
+        try:
+            pool += [(c, creator) for c in creator_twitch_clips(creator, skip_ids, 6)]
+        except Exception as e:
+            log(f"  Twitch clips of {creator} unavailable ({str(e)[:60]})")
+    if trending_on and cfg.get("creator_mode") != "fixed":
+        try:
+            pool += [(c, None) for c in search_twitch_clips(skip_ids)]
+        except Exception as e:
+            log(f"  trending Twitch clips unavailable ({str(e)[:60]})")
+    seen, ranked = set(), []
+    for c, who in sorted(pool, key=lambda t: -t[0]["views"]):
+        if c["id"] not in seen and (a.only is None or c["id"] == a.only):
+            seen.add(c["id"]); ranked.append((c, who))
+    if ranked:
+        progress(12, "Twitch clips picked by the audience")
+        log(f"Twitch first: {len(ranked)} viewer-made clips (most viewed: {ranked[0][0]['views']} views, {ranked[0][0]['channel']}); looking at the top {min(8, len(ranked))}")
+        for c, who in ranked[:8]:
+            code = try_videos([c], st, sf, a.dry, 20, who)
+            if code is not None:
+                return code
+        if PENDING:  # good moments, none great: cut the best of them before looking at YouTube at all
+            code = cut_pending(a.dry)
+            if code is not None:
+                return code
+    # 1) the user's list, in order (YouTube videos)
     for ci, creator in enumerate(creators[:10]):
         progress(10 + ci * 2, f"Looking for {creator}")
         log(f"creator: {creator}")
         vids = [v for v in search_creator(creator) if v["id"] not in skip_ids][:3]
         if len(vids) < 2:  # few fresh videos: look a few days further back so there are more options
             vids = [v for v in search_creator(creator, 7) if v["id"] not in skip_ids][:3]
-        try:  # the streamer's own Twitch clips (picked by viewers) come first: quick to process and usually the best moments
-            tw = creator_twitch_clips(creator, skip_ids)
-        except Exception as e:
-            tw = []; log(f"  Twitch clips unavailable ({str(e)[:60]})")
-        vids = tw + vids
-        log(f"  {len(tw)} Twitch clips + {len(vids) - len(tw)} videos to look at")
+        log(f"  {len(vids)} videos to look at")
         code = try_videos(vids, st, sf, a.dry, 25, creator)
         if code is not None:
             return code
@@ -825,6 +847,7 @@ def _main():
         skip_ch |= {norm(c) for c in creators}  # those were already tried above
         skip_ids = skip_ids - ({a.only} if a.only else set())
         vids = search_twitch_clips(skip_ids) + search_trending(skip_ch, skip_ids)  # viewer-made Twitch clips first (already picked by viewers)
+        vids = [v for v in vids if v["id"] not in seen]  # the Twitch clips above were already judged
         vids = [v for v in vids if v["id"] == a.only] if a.only else vids
         log(f"  {len(vids)} trending candidates: " + ", ".join(v["channel"] for v in vids))
         code = try_videos(vids, st, sf, a.dry, 35)
