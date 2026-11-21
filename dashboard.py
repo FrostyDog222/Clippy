@@ -1069,7 +1069,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.send(200, json.dumps({"config": c, "paused": PAUSE.exists(), "checks": checks(),
                                               "today": [p for p in posts if p.get("date") == today and not p.get("deleted")], "log": log,
                                               "progress": progress(), "signin": signin_state(), "jobs_mb": cleanup.jobs_mb(), "all_languages": textutil.LANGS, "perf": perf(), "ai_keys": {p["id"]: secretstore.exists(f"key_{p['id']}") for p in c.get("ai_profiles", [])}, "blocked": blocked_msg(c), "live": live_status(),
-                                              "review": review_items(), "run_stale": run_stale(), "run_timing": run_timing(), "run_suspended": run_suspended(),
+                                              "review": review_items(), "run_stale": run_stale(), "autostart": autostart_state(), "run_timing": run_timing(), "run_suspended": run_suspended(),
                                               "update": update_info(), "learn": learn_info(), "boot": BOOT, "restart_needed": restart_wanted(), "html": int((R / "dashboard.html").stat().st_mtime),
                                               "runlog": (R / "autorun.log").read_text(encoding="utf-8", errors="replace")[-8000:] if (R / "autorun.log").exists() else "",
                                               "why": "Next run is due now" if ok else "Waiting: " + why,
@@ -1185,6 +1185,14 @@ class H(http.server.BaseHTTPRequestHandler):
             self.send(200, "{}")
             threading.Thread(target=restart_self, daemon=True).start()
             return
+        elif self.path == "/api/autostart":  # start Clippy with Windows (only while Autopilot is on)
+            try:
+                on = bool(json.loads(self.rfile.read(n)).get("on"))
+                if on and not read_cfg().get("autopilot"):
+                    return self.send(400, "Turn Autopilot on first: Start with Windows only works while Autopilot is on.", "text/plain")
+                autostart_set(on)
+            except Exception as e:
+                return self.send(400, "Could not change the Windows startup entry: " + str(e)[:120], "text/plain")
         elif self.path == "/api/quit":
             self.send(200, "{}"); threading.Thread(target=self.server.shutdown).start(); return
         elif self.path == "/api/review/edit":
@@ -1343,6 +1351,42 @@ def ytdlp_loop():
         time.sleep(3 * 3600)
 
 
+AUTOSTART_KEY, AUTOSTART_NAME = "Software" + chr(92) + "Microsoft" + chr(92) + "Windows" + chr(92) + "CurrentVersion" + chr(92) + "Run", "ClippyDashboard"
+
+
+def autostart_cmd():
+    return f'"{BGPY}" "{R / "dashboard.py"}" --startup'
+
+
+def autostart_state():
+    """Is Clippy set to start with Windows? (the Run entry of THIS Windows user: no admin rights, no scheduled task, no service)"""
+    if os.name != "nt":
+        return False
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY) as k:
+            return winreg.QueryValueEx(k, AUTOSTART_NAME)[0] == autostart_cmd()
+    except OSError:
+        return False
+
+
+def autostart_set(on):
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY, 0, winreg.KEY_SET_VALUE) as k:
+        if on:
+            winreg.SetValueEx(k, AUTOSTART_NAME, 0, winreg.REG_SZ, autostart_cmd())
+        else:
+            try:
+                winreg.DeleteValue(k, AUTOSTART_NAME)
+            except FileNotFoundError:
+                pass
+
+
+def startup_blocked(argv, cfg):
+    """Started by Windows (--startup) while Autopilot is OFF: do nothing and end. Start with Windows only ever applies while Autopilot is on."""
+    return "--startup" in argv and not cfg.get("autopilot")
+
+
 _LOCK = []  # keeps the single-dashboard lock alive for the whole run
 
 
@@ -1364,6 +1408,9 @@ def single_dashboard():
 
 
 if __name__ == "__main__":
+    os.chdir(R)  # Windows starts it from another folder
+    if startup_blocked(sys.argv, read_cfg()):
+        sys.exit(0)
     single_dashboard()
     try:
         secretstore.migrate_all()  # any old plain-text key becomes an encrypted file

@@ -464,6 +464,22 @@ def test_minimum_score_setting():
     assert d.clean({**old, "min_score": 4.3}, old)["min_score"] == 4.5 and d.clean({**old, "min_score": 99}, old)["min_score"] == 10.0 and d.clean({**old, "min_score": -3}, old)["min_score"] == 1.0
 
 
+def test_start_with_windows_is_off_unless_autopilot_is_on():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    assert d.startup_blocked(["dashboard.py", "--startup"], {"autopilot": False})          # started by Windows with Autopilot off: ends at once
+    assert d.startup_blocked(["dashboard.py", "--startup"], {})
+    assert not d.startup_blocked(["dashboard.py", "--startup"], {"autopilot": True})
+    assert not d.startup_blocked(["dashboard.py"], {"autopilot": False})                  # opened by hand (dashboard.bat): always starts
+    if d.os.name == "nt":  # the Windows entry itself, under a test name that is removed again
+        keep = d.AUTOSTART_NAME; d.AUTOSTART_NAME = "ClippyDashboardSelfTest"
+        try:
+            assert not d.autostart_state(); d.autostart_set(True); assert d.autostart_state(); d.autostart_set(False); assert not d.autostart_state()
+        finally:
+            d.autostart_set(False); d.AUTOSTART_NAME = keep
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""
