@@ -428,7 +428,14 @@ def log_text(limit=2500, run_limit=1500):
             t = raw.decode("utf-8", errors="replace").replace(chr(0), "")
             i = t.rfind("live watcher started")
             return t[max(0, i - 9):][-limit:] if i >= 0 else t[-limit:]
-        return LOG.read_text(encoding="utf-8", errors="replace")[-run_limit:] if LOG.exists() else ""
+        if not LOG.exists():
+            return ""
+        raw = LOG.read_bytes()
+        try:
+            raw = raw[int((R / "run_log_mark.txt").read_text()):]  # "Clear log" moves this mark: the post history file itself is never emptied
+        except (OSError, ValueError):
+            pass
+        return raw.decode("utf-8", errors="replace")[-run_limit:]
     except OSError:
         return ""
 
@@ -865,7 +872,7 @@ def review_items():
             et, ed, eg = split_meta(meta)
             out.append({"id": f.stem, "title": meta.get("yt_title", ""), "desc": meta.get("yt_description", ""), "caption": meta.get("tiktok_caption", ""),
                         "edit_title": et, "edit_desc": ed, "edit_tags": " ".join(eg), "edit_tiktok": meta.get("tiktok_custom", ""), "edited": bool(meta.get("edited")),
-                        "seconds": d.get("seconds"), "layout": d.get("layout"), "captions_off": d.get("captions_off"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "reviewed": bool(d.get("reviewed") or d.get("rating") in (1, -1)), "reason": d.get("reason"), "reasons": d.get("reasons"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
+                        "seconds": d.get("seconds"), "layout": d.get("layout"), "captions_off": d.get("captions_off"), "origin": d.get("origin"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "reviewed": bool(d.get("reviewed") or d.get("rating") in (1, -1)), "reason": d.get("reason"), "reasons": d.get("reasons"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
                         "posted": json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {}, "status": REVIEW_STATUS.get(f.stem)})
         except Exception:
             continue
@@ -1223,6 +1230,8 @@ class H(http.server.BaseHTTPRequestHandler):
             update_run(self.path.rsplit("/", 1)[1], wait=True)
         elif self.path == "/api/clearlog":
             (R / "autorun.log").write_text("", encoding="utf-8")
+            if LOG.exists():
+                (R / "run_log_mark.txt").write_text(str(LOG.stat().st_size))
             if (R / "live_watch.log").exists():
                 (R / "live_log_mark.txt").write_text(str((R / "live_watch.log").stat().st_size))  # not emptied: the live watcher is still writing to it
         elif self.path == "/api/custom":
@@ -1375,6 +1384,11 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.send(400, "bad values", "text/plain")
             if (REVIEW_STATUS.get(stem) or {}).get("state") == "posting" or (R / "post.lock").exists():
                 return self.send(409, "Busy: wait until the current post or re-cut has finished", "text/plain")
+            try:
+                if json.loads((REVIEW / (stem + ".json")).read_text(encoding="utf-8")).get("origin") == "live":  # the stream moved on: there is no source to cut again (it would record the live stream instead)
+                    return self.send(409, "Clips from live streams cannot be cut again: the moment is gone from the stream.", "text/plain")
+            except Exception:
+                pass
             REVIEW_STATUS[stem] = {"state": "posting", "msg": "Re-cutting this clip..."}
             threading.Thread(target=review_recut, args=(stem, layout, nocaps), daemon=True).start()
         elif self.path == "/api/review/rejoke":
