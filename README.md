@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="docs/clippy.png" alt="Clippy, the paperclip mascot with sunglasses and a thumbs up" width="560">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/clippy-dark.png">
+    <img src="docs/clippy-light.png" alt="Clippy, the paperclip mascot with sunglasses and a thumbs up" width="520">
+  </picture>
 </p>
 
 # Clippy
@@ -92,10 +95,6 @@ Windows 10 or 11, Google Chrome, Python 3.10+, ffmpeg and a JavaScript runtime f
 4. **Review the clips and rate them.** That is the step that makes Clippy yours.
 
 Autopilot and Auto-Post are OFF by default. In "Ready to post", the "Post as" choice defaults to private.
-
-<p align="center">
-  <img src="docs/lets-create.png" alt="Let's create!" width="420">
-</p>
 
 ## What leaves your PC
 
