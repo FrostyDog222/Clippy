@@ -879,6 +879,26 @@ def test_english_captions_are_byte_identical_and_other_scripts_get_fonts():
     assert cut.build_ass(ar, 0.0, 2.0, "", 1460, caps="word", lang="ar").count("Dialogue") >= 2
 
 
+def test_live_clip_keeps_raw_footage_until_removed():
+    import sys, tempfile, json
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent)); sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import autorun, dashboard as d
+    tmp = Path(tempfile.mkdtemp()); kr, kd = autorun.REVIEW, d.REVIEW
+    autorun.REVIEW = d.REVIEW = tmp / "review"
+    try:
+        job = tmp / "jobs" / "x-1"; (job / "edits").mkdir(parents=True); raw = job / "live" / "x.mp4"; raw.parent.mkdir()
+        raw.write_bytes(b"raw"); (job / "candidates.json").write_text(json.dumps({"source": str(raw)}))
+        clip = job / "edits" / "clip_1.mp4"; clip.write_bytes(b"c"); clip.with_suffix(".json").write_text(json.dumps({"origin": "live", "start": 1, "end": 5}))
+        autorun.sh = lambda *a, **k: None
+        stem = autorun.queue_for_review(clip)
+        assert (tmp / "review" / (stem + ".raw")).read_bytes() == b"raw"
+        assert json.loads((tmp / "review" / (stem + ".json")).read_text())["job"] == str(job)
+        d.review_remove(stem)
+        assert not (tmp / "review" / (stem + ".raw")).exists()   # removed with the clip
+    finally:
+        autorun.REVIEW, d.REVIEW = kr, kd
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

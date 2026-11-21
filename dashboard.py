@@ -662,6 +662,13 @@ def review_purge():
                 review_unlink(f, 1)
         except Exception:
             pass
+    for f in REVIEW.glob("*__clip_*.raw"):  # raw footage kept for re-cutting: gone once the clip is posted or removed
+        try:
+            sf = f.with_suffix(".posted.json")
+            if not f.with_suffix(".json").exists() or (sf.exists() and any(json.loads(sf.read_text(encoding="utf-8")).values())):
+                review_unlink(f, 1)
+        except Exception:
+            pass
     for f in REVIEW.glob("*__clip_*.posted.json"):
         if not f.with_name(f.name.replace(".posted.json", ".json")).exists() and not f.with_name(f.name.replace(".posted.json", ".mp4")).exists():
             review_unlink(f, 1)
@@ -765,7 +772,14 @@ def review_recut(stem, layout, nocaps=False):
         cj = REVIEW / (stem + ".json"); d = json.loads(cj.read_text(encoding="utf-8"))
         url, pick = d["source_url"], int(stem.split("clip_")[1])
         job = job_dir(url); src = job / "source.mp4"
-        if not src.exists():
+        if d.get("origin") == "live":  # a live clip: cut again from the short raw clip that was kept with it (the stream itself is long gone)
+            raw = REVIEW / (stem + ".raw")
+            if not raw.exists() or not d.get("job") or not d.get("raw_src"):
+                raise RuntimeError("This live clip's raw footage was not kept, so it cannot be cut again.")
+            job = pathlib.Path(d["job"]); rs = pathlib.Path(d["raw_src"])
+            if not rs.exists():
+                rs.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(raw, rs)
+        elif not src.exists():
             say("posting", "Re-cutting this clip: downloading the source again...")
             run(ytdlp_base(url) + ["-f", "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080]/b", "--merge-output-format", "mp4", "-o", str(src), url])
         say("posting", f"Re-cutting this clip ({layout})...")
@@ -872,7 +886,7 @@ def review_items():
             et, ed, eg = split_meta(meta)
             out.append({"id": f.stem, "title": meta.get("yt_title", ""), "desc": meta.get("yt_description", ""), "caption": meta.get("tiktok_caption", ""),
                         "edit_title": et, "edit_desc": ed, "edit_tags": " ".join(eg), "edit_tiktok": meta.get("tiktok_custom", ""), "edited": bool(meta.get("edited")),
-                        "seconds": d.get("seconds"), "layout": d.get("layout"), "captions_off": d.get("captions_off"), "origin": d.get("origin"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "reviewed": bool(d.get("reviewed") or d.get("rating") in (1, -1)), "reason": d.get("reason"), "reasons": d.get("reasons"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
+                        "seconds": d.get("seconds"), "layout": d.get("layout"), "captions_off": d.get("captions_off"), "origin": d.get("origin"), "raw": (REVIEW / (stem + ".raw")).exists() if d.get("origin") == "live" else None, "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "reviewed": bool(d.get("reviewed") or d.get("rating") in (1, -1)), "reason": d.get("reason"), "reasons": d.get("reasons"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
                         "posted": json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {}, "status": REVIEW_STATUS.get(f.stem)})
         except Exception:
             continue
@@ -1385,8 +1399,9 @@ class H(http.server.BaseHTTPRequestHandler):
             if (REVIEW_STATUS.get(stem) or {}).get("state") == "posting" or (R / "post.lock").exists():
                 return self.send(409, "Busy: wait until the current post or re-cut has finished", "text/plain")
             try:
-                if json.loads((REVIEW / (stem + ".json")).read_text(encoding="utf-8")).get("origin") == "live":  # the stream moved on: there is no source to cut again (it would record the live stream instead)
-                    return self.send(409, "Clips from live streams cannot be cut again: the moment is gone from the stream.", "text/plain")
+                dd = json.loads((REVIEW / (stem + ".json")).read_text(encoding="utf-8"))
+                if dd.get("origin") == "live" and not (REVIEW / (stem + ".raw")).exists():  # no raw footage kept (older clip): the stream is gone, downloading it again would record the live stream instead
+                    return self.send(409, "This live clip cannot be cut again: its raw footage was not kept (only clips made from now on keep it).", "text/plain")
             except Exception:
                 pass
             REVIEW_STATUS[stem] = {"state": "posting", "msg": "Re-cutting this clip..."}

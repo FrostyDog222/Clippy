@@ -343,6 +343,14 @@ def queue_for_review(clip):
     stem = f"{int(time.time())}__{clip.stem}"  # must keep "clip_N": post_clip.py derives the meta file name from it
     shutil.copy2(clip, REVIEW / f"{stem}.mp4")
     d = json.loads(clip.with_suffix(".json").read_text(encoding="utf-8")); d["file"] = str(REVIEW / f"{stem}.mp4")
+    if d.get("origin") == "live":  # the stream moves on: keep the short raw clip (15-40 MB) next to the finished one so Crop / Rebuild without captions still work; deleted with the clip
+        try:
+            job = clip.parent.parent
+            raw = pathlib.Path(json.loads((job / "candidates.json").read_text(encoding="utf-8"))["source"])
+            if raw.exists():
+                shutil.copy2(raw, REVIEW / f"{stem}.raw"); d["job"] = str(job); d["raw_src"] = str(raw)
+        except Exception as e:
+            log(f"  could not keep the raw clip ({str(e)[:60]}): Crop / Rebuild will not work for it")
     (REVIEW / f"{stem}.json").write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
     sh([PY, "scripts/make_meta.py", str(REVIEW / f"{stem}.json")])
     try:  # remember this moment (and its streamer) so the same one is never made twice
