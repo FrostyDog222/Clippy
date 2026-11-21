@@ -397,6 +397,10 @@ def _stage1(v, score, job, n, c, creator):
     if v.get("twitch") and (v.get("views") or 0) >= 300:  # the streamer's own audience picked this moment: the more viewers, the stronger the signal (+0.25 at 1k views up to +1.0 at 100k+... capped)
         vb = round(min(1.0, 0.25 * __import__("math").log10(v["views"] / 100)), 2)
         bonus += vb; bonus_notes.append((vb, f"viewers picked it ({v['views']:,} views)"))
+    sg = c.get("sig") or {}  # the streamer reacting out loud is what made clips stand out in the user's ratings (excited voice and swearing separated 👍 clips from meh ones)
+    rb = round(min(1.0, 0.3 * min(sg.get("voice", 0), 2.5) + 0.3 * min(sg.get("swear", 0), 2.0)), 2)
+    if rb >= 0.1:
+        bonus += rb; bonus_notes.append((rb, "excited voice / swearing: the streamer is reacting"))
     scene, win_score, res_score = None, None, None
     if CFG.get("title_writer") in ("claude", "api"):  # an AI reads what is said (silences included) and finds where the bit really starts and ends
         try:

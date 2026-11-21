@@ -109,6 +109,11 @@ def _judge_rules(json, tempfile):
     assert autorun.judge(v, 6.0, tmp, 1, c, None)
     res.update(cutscene=False, score=7); ai_check.refine_window = lambda *a, **k: None  # no AI read of the speech
     assert autorun.judge(v, 6.0, tmp, 1, {**c, "why": ["a"]}, None)["feat"]["penalty"] == 1.0
+    base = autorun.judge(v, 6.0, tmp, 1, {**c, "sig": {}}, None)
+    loud = autorun.judge(v, 6.0, tmp, 1, {**c, "sig": {"voice": 2.0, "swear": 1.5}}, None)  # excited voice + swearing: a boost on top of the same moment, capped at +1
+    assert loud and 0.9 <= loud["rank"] - base["rank"] <= 1.0 and any("swearing" in n for n in loud["feat"]["notes"]), (loud["rank"], base["rank"])
+    quiet = autorun.judge(v, 6.0, tmp, 1, {**c, "sig": {"voice": 0.3, "swear": 0}}, None)
+    assert quiet and abs(quiet["rank"] - base["rank"]) < 1e-9  # a calm moment gets nothing extra
     tw = autorun.judge({**v, "twitch": True}, 4.5, tmp, 1, c, None)  # a clip viewers made: no energy / no-AI-read penalty
     assert tw and tw["feat"]["penalty"] == 0, tw
     ai_check.refine_window = lambda *a, **k: {**win, "score": 3}  # a very popular Twitch clip the AI finds weak: a penalty, not a rejection
