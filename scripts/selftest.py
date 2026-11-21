@@ -451,6 +451,19 @@ def test_new_helpers_views_flags_slots_reason():
     assert "nudity" in learn.OFF_MOMENT and "boring" not in learn.OFF_MOMENT and "boring" in d.WHY
 
 
+def test_minimum_score_setting():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent)); sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import autorun as a, dashboard as d
+    a.CFG = {}; assert a.min_score() == 7.0 and a.slack() == 0.0              # default: the bar stays 7
+    a.CFG = {"min_score": 4.5}; assert a.min_score() == 4.5 and a.slack() == 2.5  # lowered: the hard rejects relax by the same amount
+    a.CFG = {"min_score": 9.5}; assert a.slack() == 0.0                       # raising it never relaxes anything
+    a.CFG = {"min_score": "junk"}; assert a.min_score() == 7.0
+    a.CFG = {}
+    old = d.read_cfg()
+    assert d.clean({**old, "min_score": 4.3}, old)["min_score"] == 4.5 and d.clean({**old, "min_score": 99}, old)["min_score"] == 10.0 and d.clean({**old, "min_score": -3}, old)["min_score"] == 1.0
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

@@ -378,8 +378,8 @@ def _stage1(v, score, job, n, c, creator):
     strict = CFG.get("quality", "strict") == "strict"  # quality over quantity is ON unless the user switches it off
     # strict no longer means "reject on any single weak signal" (that left runs empty): soft problems are penalties on one rank, only clear junk is rejected
     pen = []
-    if strict and ORIGIN != "live" and score < 5.0:  # the viral score (voice, laughter, swearing, action, chat...): 5+ = clearly strong
-        if score < 4.0:
+    if strict and ORIGIN != "live" and score < 5.0 - slack():  # the viral score (voice, laughter, swearing, action, chat...): 5+ = clearly strong
+        if score < 4.0 - slack():
             log(f"  viral score {score} is far below the bar, skipping"); return None
         if not v.get("twitch"):  # a clip viewers made is already a moment people picked: the energy score does not need to prove it
             pen.append((1.0, f"viral score {score} is under 5"))
@@ -424,7 +424,7 @@ def _stage1(v, score, job, n, c, creator):
             log(f"  AI bit finder: {c['start']:.0f}-{c['end']:.0f}s -> {ws:.0f}-{we:.0f}s ({we - ws:.0f}s) score {win['score']:g}/10, speaker {win['speaker']}, "
                 f"standalone {win['standalone']}{', risky (flag only)' if win['risky'] else ''}: {win['why']}")
             if strict and ORIGIN != "live":
-                if win["score"] < 4.5:
+                if win["score"] < 4.5 - slack():
                     if v.get("twitch") and (v.get("views") or 0) >= 50000:  # a clip that many viewers picked is not thrown away over the speech alone: a penalty, it still has to rank well
                         pen.append((1.0, f"weak AI score ({win['score']:g}/10) although {v['views']:,} viewers picked it"))
                     else:
@@ -523,7 +523,7 @@ def _stage2(v, job, st):
         nudge = 0.0
     if nudge:
         rank += nudge; feat["learned"] = nudge; feat["notes"].append(f"{nudge:+g} learned from your ratings")
-    return {"c": c, "cut_range": cut_range, "scene": scene, "rank": rank, "weak": adj < 4.5, "feat": feat, "has_caps": bool(caps)}  # weak = only a fallback for a run that would otherwise find nothing
+    return {"c": c, "cut_range": cut_range, "scene": scene, "rank": rank, "weak": adj < 4.5 - slack() or rank < min_score(), "feat": feat, "has_caps": bool(caps)}  # weak = only a fallback for a run that would otherwise find nothing
 
 def judge(v, score, job, n, c, creator):
     """Both stages for one moment (used by the live watcher and anywhere a single moment is judged)."""
@@ -545,6 +545,19 @@ def expire_rejected(st, days=4):
         if (now - dt.datetime.fromisoformat(t)).days < days:
             keep.append(vid)
     st["rejected"] = keep
+
+
+def min_score():
+    """The lowest score (the star number on a clip card) a moment may have to be added. Default 7. The user can lower it in Settings."""
+    try:
+        return max(1.0, min(10.0, float(CFG.get("min_score", 7.0))))
+    except (TypeError, ValueError):
+        return 7.0
+
+
+def slack():
+    """How far below the default bar (7) the user went: the hard rejects on the viral score and the AI bit score relax by this much."""
+    return max(0.0, 7.0 - min_score())
 
 
 def caption_args(jd):
