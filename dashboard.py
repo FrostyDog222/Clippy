@@ -1333,6 +1333,20 @@ class H(http.server.BaseHTTPRequestHandler):
                 restore_bundle(json.loads(self.rfile.read(n)))
             except (ValueError, KeyError, TypeError, AssertionError) as e:
                 return self.send(400, str(e) or "This backup could not be restored.", "text/plain")
+        elif self.path == "/api/live/swap":  # the user pressed Change on a watched streamer: tell the live watcher (it reads this file; nothing else ever writes it)
+            try:
+                if self.headers.get("Host", "").split(":")[0] not in ("127.0.0.1", "localhost"):
+                    return self.send(400, "refused", "text/plain")
+                b = json.loads(self.rfile.read(n)); url = str(b["url"]); to = str(b.get("to") or "").strip()[:200]
+                assert re.match(r"^https://\S+$", url)
+                if live_status() is None:
+                    return self.send(409, "Live watching is not running", "text/plain")
+                f = R / "live_cmd.json"
+                cmds = json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
+                (f.with_suffix(".tmp")).write_text(json.dumps((cmds if isinstance(cmds, list) else []) + [{"url": url, "to": to}]), encoding="utf-8")
+                os.replace(f.with_suffix(".tmp"), f)
+            except Exception:
+                return self.send(400, "bad request", "text/plain")
         elif self.path == "/api/autostart":  # start Clippy with Windows (only while Autopilot is on)
             try:
                 on = bool(json.loads(self.rfile.read(n)).get("on"))

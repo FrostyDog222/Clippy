@@ -4,7 +4,7 @@ Switched on from the dashboard ("Live chat watching"). The dashboard starts it; 
 
 python scripts/live_watch.py [--list] [--dry]    --list: only show which streams it would watch; --dry: cut clips but do not post
 Sources: YouTube and Twitch live streams. One upload at a time (post.lock is shared with autorun.py)."""
-import argparse, datetime as dt, json, os, pathlib, re, shutil, subprocess, sys, time
+import argparse, datetime as dt, json, os, pathlib, random, re, shutil, subprocess, sys, time
 
 import os as _os
 _os.environ["PYTHONUTF8"] = "1"  # every child process this script starts then writes UTF-8 too: a video title with an emoji must never crash a run (the old Windows text encoding cannot hold it)
@@ -141,6 +141,45 @@ def stream_ended(url):
         return False
 
 
+def parse_target(to):
+    """What the user typed under 'switch to': a link to a stream, or just a streamer name (taken as a Twitch name) -> (platform, url), or None when it is not usable."""
+    to = (to or "").strip()
+    if not to:
+        return None
+    m = re.match(r"^https?://(?:www\.|m\.)?(twitch\.tv|youtube\.com|youtu\.be)/\S+$", to, re.I)
+    if m:
+        return ("Twitch" if m.group(1).lower() == "twitch.tv" else "YouTube", to)
+    login = re.sub(r"[^A-Za-z0-9_]", "", to)
+    return ("Twitch", f"https://twitch.tv/{login}") if 3 <= len(login) <= 25 else None
+
+
+def lookup_live(platform, url, cfg):
+    """The stream dict for a live stream the user chose, or None when it is not live right now (or cannot be read)."""
+    try:
+        from yt_dlp import YoutubeDL
+        with YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True, "socket_timeout": 20}) as y:
+            i = y.extract_info(url, download=False) or {}
+        if not i.get("is_live"):
+            return None
+        ch = i.get("uploader") or i.get("channel") or url.rstrip("/").rsplit("/", 1)[-1]
+        creators = list(cfg.get("creators") or [])
+        mine = next((c for c in creators if norm(c) in norm(ch) or (norm(ch) and norm(ch) in norm(c))), None)
+        return {"platform": platform, "channel": ch, "title": re.sub(r"\s*\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", "", i.get("title") or ""), "url": url,
+                "viewers": i.get("concurrent_view_count") or i.get("view_count") or 0, "creator": mine}
+    except BaseException:
+        return None
+
+
+def pick_other(found, watches, cooldown, avoid_url):
+    """A random live stream (from the trending / your list search, the same rules as always) that is not watched, for 'replace this one with something else'.
+    Streams on your list are preferred when one is live; otherwise a random one of the best few."""
+    free = [s for s in found if s["url"] != avoid_url and cooldown.get(s["url"], 0) <= time.time()
+            and not any(norm(w.s["channel"]) == norm(s["channel"]) for w in watches)]
+    mine = [s for s in free if s.get("creator")]
+    pool = mine or free[:8]
+    return random.choice(pool) if pool else None
+
+
 def pick_victim(watches, cand, now=None):
     """Which watched stream should make room for `cand` (a live stream that is not watched yet)? None = nobody (keep what we have).
     - a streamer from your list who is live but not watched replaces the weakest stream that is NOT on your list (and has been quiet for 15 minutes);
@@ -231,6 +270,29 @@ def main():
             if not cfg.get("live_watch") or (R / "PAUSED.txt").exists():
                 log("switched off or paused: stopping"); break
             autorun.configure(cfg)
+            cmdf = R / "live_cmd.json"
+            if cmdf.exists():  # the user pressed Change on a streamer in the dashboard: only a click writes this file
+                try:
+                    cmds = json.loads(cmdf.read_text(encoding="utf-8")); cmdf.unlink(missing_ok=True)
+                except Exception:
+                    cmds = []
+                for cmd in cmds if isinstance(cmds, list) else []:
+                    old = next((w for w in watches if w.url == cmd.get("url")), None)
+                    if not old:
+                        continue
+                    to = str(cmd.get("to") or "").strip()
+                    if to:
+                        tgt = parse_target(to)
+                        new = lookup_live(*tgt, cfg) if tgt else None
+                        if not new:
+                            last = f"could not switch {old.s['channel']}: {to[:40]} is not live right now (or is not a streamer name or stream link)"; log("  " + last); continue
+                    else:
+                        new = pick_other(discover(cfg), watches, cooldown, old.url)
+                        if not new:
+                            last = f"no other live stream found to replace {old.s['channel']}: kept"; log("  " + last); continue
+                    watches.remove(old); old.stop(); cooldown[old.url] = time.time() + 3 * 3600
+                    log(f"switching {old.s['channel']} for {new['channel']} (you asked for it)")
+                    watches.append(Watch(new)); last = f"switched {old.s['channel']} to {new['channel']}"
             maxn = max(1, min(5, int(cfg.get("live_max_streams", 3))))
             for w in [w for w in watches if not w.alive()]:
                 watches.remove(w); w.stop(); log(f"stream finished: {w.s['channel']}")

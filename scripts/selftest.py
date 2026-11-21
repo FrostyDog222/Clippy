@@ -782,6 +782,23 @@ def test_ended_youtube_streams_are_detected():
             sys.modules.pop("yt_dlp", None)
 
 
+def test_live_swap_helpers():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent)); sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import live_watch as lw
+    from types import SimpleNamespace as NS
+    assert lw.parse_target("https://www.twitch.tv/lirik") == ("Twitch", "https://www.twitch.tv/lirik")
+    assert lw.parse_target("https://www.youtube.com/watch?v=abc123") == ("YouTube", "https://www.youtube.com/watch?v=abc123")
+    assert lw.parse_target("  Lirik ") == ("Twitch", "https://twitch.tv/Lirik") and lw.parse_target("") is None and lw.parse_target("a") is None
+    assert lw.parse_target("javascript:alert(1)") is None or lw.parse_target("javascript:alert(1)")[1].startswith("https://twitch.tv/")   # never a foreign address
+    w = NS(s={"channel": "Watched"})
+    found = [{"url": "u1", "channel": "Watched"}, {"url": "u2", "channel": "Other", "creator": None}, {"url": "u3", "channel": "Mine", "creator": "Mine"}]
+    assert lw.pick_other(found, [w], {}, "old")["channel"] == "Mine"                    # a streamer from your list is preferred
+    found2 = [{"url": "u1", "channel": "Watched"}, {"url": "u2", "channel": "Other"}]
+    assert lw.pick_other(found2, [w], {}, "old")["channel"] == "Other"                  # never one that is already watched
+    assert lw.pick_other(found2, [w], {"u2": 9e12}, "old") is None                      # nor one that was just swapped out
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""
