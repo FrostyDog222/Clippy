@@ -151,6 +151,19 @@ def process(item, cfg, dry):
     return False
 
 
+def write_progress(watches, posted, want, last, prepare_only, done=False):
+    """The dashboard's Current run bar: what the live watcher is doing right now (so the run never looks 'interrupted' while it is just waiting for chat to explode)."""
+    try:
+        if done:
+            pct, msg = 100, f"Done: {posted} clip(s) are in Ready to post"
+        else:
+            pct = 5 + int(90 * min(posted, want) / want) if prepare_only else 5
+            msg = f"Live: watching {len(watches)} stream(s)" + (f" - {posted} of {want} clip(s) ready" if prepare_only else f" - {posted} posted") + ("" if last in ("starting", "") else f" - {last}")
+        (R / "progress.json").write_text(json.dumps({"pct": pct, "msg": msg[:200], "ts": dt.datetime.now().isoformat(timespec="seconds")}), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def write_status(watches, queue, posted, last):
     STATUS.write_text(json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"), "queued": len(queue), "posted": posted, "last": last,
                                   "watching": [{"platform": w.s["platform"], "channel": w.s["channel"], "title": w.s["title"][:80], "url": w.url,
@@ -235,11 +248,12 @@ def main():
                         log(last)
             write_status(watches, queue, posted, last)
             want = max(1, int(cfg.get("live_target") or cfg.get("clips_per_run", 1) or 1))
+            write_progress(watches, posted, want, last, not cfg.get("auto_post", False))
             if not cfg.get("auto_post", False) and posted >= want:  # prepare-only live mode: "clips this run" is how many clips it makes, then it switches itself off
                 log(f"{posted} clip(s) ready (the number you chose for this run): live mode switches itself off")
                 c2 = cfg_now(); c2["live_watch"] = False
                 (R / "autopost_config.json").write_text(json.dumps(c2, indent=2), encoding="utf-8")
-                last = f"done: {posted} clip(s) are in Ready to post"; break
+                last = f"done: {posted} clip(s) are in Ready to post"; write_progress(watches, posted, want, last, True, done=True); break
             time.sleep(10)
     finally:
         for w in watches:

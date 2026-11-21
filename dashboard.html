@@ -472,8 +472,10 @@ function toggleLog(){logOpen=!logOpen;try{localStorage.setItem('logOpen',logOpen
 function setRunLog(t){if(t===logTxt)return;logTxt=t;const e=$('runlog'),near=e.scrollHeight-e.scrollTop-e.clientHeight<40;e.textContent=t||'(the log is empty)';if(near||!e.scrollTop)e.scrollTop=e.scrollHeight}
 function fmtDur(s){s=Math.max(0,Math.round(s));if(s<90)return s+' s';const m=Math.round(s/60);return m<90?m+' min':Math.floor(m/60)+' h '+String(m%60).padStart(2,'0')+' min'}
 function setTiming(T){$('rt').textContent=T?'Running for '+fmtDur(T.elapsed)+(T.typical?' · a typical run takes about '+fmtDur(T.typical):' · no finished runs yet to estimate from')+(T.slow?' · taking longer than usual':(T.eta?' · roughly '+fmtDur(T.eta)+' left (an estimate)':'')):''}
-function prog(p,run,stale){const bar=$('bar');if(!p){bar.style.width='0';$('pm').dataset.state='idle';$('pm').textContent='No run yet';return}
-if(stale){$('pm').dataset.state='fail';bar.style.width='100%';bar.style.background='var(--bad)';$('pm').innerHTML='The run was interrupted (the PC may have gone to sleep, or Clippy was closed): nothing is running any more. It last said "'+esc(p.msg)+'". <a href="#" class="lnk" onclick="post(&quot;/api/run&quot;);return false">Run again</a> (starts a new run with your current settings; clips already made are kept) or press Show log to see the last lines.';return}
+function prog(p,run,stale,live){const bar=$('bar');
+if(live){const n=(live.watching||[]).length,w=Math.max(6,(p&&p.pct>0&&p.pct<100)?p.pct:6);bar.style.width=w+'%';bar.style.background='var(--acc)';$('pm').dataset.state='busy';$('pm').textContent='Live: watching '+n+' stream'+(n===1?'':'s')+' - '+(live.posted||0)+' clip(s) ready'+(live.last&&live.last!=='starting'?' - '+live.last:'');return}
+if(!p){bar.style.width='0';$('pm').dataset.state='idle';$('pm').textContent='No run yet';return}
+if(stale){$('pm').dataset.state='fail';bar.style.width='100%';bar.style.background='var(--bad)';$('pm').innerHTML='<span style="flex:1">The run was interrupted: the PC may have gone to sleep or Clippy was closed, and nothing is running any more. It last said &ldquo;'+esc(p.msg)+'&rdquo;. Run again starts a new run with your current settings (clips already made are kept). Show log has the last lines.</span><button type="button" class="btn pri" style="flex:none" onclick="post(&quot;/api/run&quot;)">Run again</button>';return}
 const age=(Date.now()-new Date(p.ts))/60000,fail=p.pct<0,done=p.pct>=100;bar.style.width=(fail?100:Math.min(100,p.pct))+'%';bar.style.background=fail?'var(--bad)':'var(--acc)';
 $('pm').dataset.state=fail?'fail':done?'done':'busy';$('pm').textContent=(fail?'Stopped or failed: ':done?'Done: ':p.pct+'%  ')+p.msg+(run&&age>20?'  (no update for '+Math.round(age)+' min, may be stalled)':'')}
 async function load(force){let d;try{d=await (await fetch('/api/state')).json()}catch(e){$('status').textContent='Dashboard closed';return}
@@ -497,7 +499,7 @@ $('stb').disabled=(d.signin||{}).busy==='stats';
 $('stm').textContent=P.updated?'Numbers last read '+P.updated.replace('T',' '):'No numbers read yet: press Refresh numbers after a clip has been up for a while';
 $('ins').innerHTML=P.insights.length?P.insights.map(x=>'&bull; '+esc(x)).join('<br>'):'<span class="hint">'+(P.need?'Needs '+P.need+' more posts with numbers before it can say what works best.':'Not enough different posts to compare yet.')+'</span>';
 lastPerf=P;renderPerf()}
-$('log').textContent=d.log||'(empty)';prog(p,run,d.run_stale)}
+$('log').textContent=d.log||'(empty)';prog(p,run,d.run_stale&&!d.live,d.live)}
 
 function schedLine(x){if(x.scheduled){const d=new Date(x.scheduled.at);return '&#9200; Scheduled for <b>'+fmtD(d,1)+'</b> ('+(x.scheduled.mode==='public'?'Public':'Private')+') &bull; <a href="#" class="lnk" data-id="'+x.id+'" onclick="schedCancel(this.dataset.id);return false">Cancel</a>'}
 if(x.sched_missed){const d=new Date(x.sched_missed);return '&#9888; The scheduled time ('+fmtD(d)+') passed while Clippy was closed, so it was not posted. Schedule it again or post it now.'}return ''}

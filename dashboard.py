@@ -96,7 +96,7 @@ def run_alive():
             return True
     except Exception:
         pass
-    return (R / "post.lock").exists() or any((s or {}).get("state") == "posting" for s in REVIEW_STATUS.values())
+    return (R / "post.lock").exists() or any((s or {}).get("state") == "posting" for s in REVIEW_STATUS.values()) or live_status() is not None  # the live watcher counts as running too
 
 
 def run_stale():
