@@ -935,8 +935,8 @@ def test_old_clips_leave_ready_to_post_by_themselves():
     assert d.review_expiry({}, old, 3) < time.time() and d.review_expiry({}, new, 3) > time.time() and d.review_expiry({}, old, 0) is None
     future = (datetime.datetime.now() + datetime.timedelta(hours=2)).isoformat(timespec="minutes")
     assert d.review_expiry({"scheduled": {"at": future}}, old, 3) is None and d.review_expiry({"keep": True}, old, 3) is None   # a coming post or a Keep stops the removal
-    tmp = Path(tempfile.mkdtemp()); keep, kc = d.REVIEW, d.read_cfg
-    d.REVIEW = tmp; d.read_cfg = lambda: {"keep_clips_days": 3}
+    tmp = Path(tempfile.mkdtemp()); keep, kc, kr = d.REVIEW, d.read_cfg, d.R
+    d.REVIEW = tmp; d.R = tmp; d.read_cfg = lambda: {"keep_clips_days": 3}   # R too: a real post.lock (something is posting right now) must not matter
     try:
         for s_, extra in ((old, {}), (new, {}), (kept, {"keep": True})):
             (tmp / (s_ + ".mp4")).write_bytes(b"v"); (tmp / (s_ + ".raw")).write_bytes(b"r"); (tmp / (s_ + ".json")).write_text(json.dumps({"features": {"win": 1}, **extra}))
@@ -947,7 +947,7 @@ def test_old_clips_leave_ready_to_post_by_themselves():
         d.read_cfg = lambda: {"keep_clips_days": 1}; d.review_expire()                      # the setting changes later: the clip keeps its own period
         assert (tmp / (new + ".mp4")).exists() and d.review_expiry(json.loads((tmp / (new + ".json")).read_text()), new, 1) == int(new.split("__")[0]) + 3 * 86400
     finally:
-        d.REVIEW, d.read_cfg = keep, kc
+        d.REVIEW, d.read_cfg, d.R = keep, kc, kr
 
 
 def test_titles_survive_bad_on_video_text():
