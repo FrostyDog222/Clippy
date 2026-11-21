@@ -188,6 +188,21 @@ def test_removed_clips_teach_meh():
         srv.shutdown(); d.R, d.REVIEW = keep
 
 
+def test_meh_is_neutral():
+    import random, tempfile
+    random.seed(2)
+    learn.W_FILE = Path(tempfile.mkdtemp()) / "w.json"
+    assert 0 < learn.MEH_WEIGHT < 0.5
+    mk = lambda i, r, win: {"id": str(i), "rating": r, "features": {"win": win, "frames": random.uniform(5, 9), "score": random.uniform(4, 7), "penalty": 0, "sig": {"loud": random.random()}}}
+    base = [mk(i, 1 if i % 2 else -1, random.uniform(7, 9) if i % 2 else random.uniform(3, 5)) for i in range(30)]
+    meh = [mk(100 + i, 0, random.uniform(3, 9)) for i in range(60)]  # twice as many meh clips as clips that stood out, with no pattern
+    only_meh = [mk(200 + i, 0, 5) for i in range(60)] + [mk(300, 1, 8), mk(301, -1, 4)]
+    assert learn.fit(only_meh) is None  # lots of meh but hardly any 👍/👎: nothing is learned (the ratings are what teaches)
+    m1, m2 = learn.fit(base), learn.fit(base + meh)
+    a, b = learn.adjust({"win": 9, "frames": 7, "score": 6, "penalty": 0, "sig": {"loud": 0.5}}, m1), learn.adjust({"win": 9, "frames": 7, "score": 6, "penalty": 0, "sig": {"loud": 0.5}}, m2)
+    assert a > 0 and b > 0 and abs(a - b) < 0.35, (a, b)  # many meh clips do not flip or wipe out what the standouts say
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

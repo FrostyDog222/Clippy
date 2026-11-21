@@ -2,8 +2,8 @@
 bad, just not worth posting). Reads ratings.jsonl (written by the dashboard, local only) plus the clips still waiting in review/ (the unrated ones are the "meh"
 examples) and prints, for every signal Clippy logs with a clip, the average per kind. Needs ~30 clips to mean anything. The report changes nothing.
 python scripts/learn.py        (report)
-python scripts/learn.py fit    (learn: writes learned_weights.json, only with 30+ clips, 8+ that stood out as good and 8+ that did not)
-Once learned_weights.json exists, Clippy adds a small nudge (at most +-1 on a rank of about 5-10) to moments that look like your 👍 clips and subtracts for moments that look like your 👎 ones."""
+python scripts/learn.py fit    (learn: writes learned_weights.json, only with 30+ clips, 8+ 👍 and 12+ clips rated 👍 or 👎; meh clips count little)
+Meh clips are neutral (counted with a low weight). Once learned_weights.json exists, Clippy adds a small nudge (at most +-1 on a rank of about 5-10) to moments that look like your 👍 clips and subtracts for moments that look like your 👎 ones."""
 import datetime as dt, json, math, pathlib, statistics as stt
 
 R = pathlib.Path(__file__).resolve().parent.parent
@@ -69,7 +69,9 @@ def report(rows):
 
 
 W_FILE = R / "learned_weights.json"
-MIN_RATED, MIN_EACH = 30, 8  # clips in total; at least 8 that stood out as good and 8 that did not (bad or meh)
+MIN_RATED, MIN_EACH, MIN_STOOD = 30, 8, 12  # clips in total; at least 8 👍; and at least 12 clips with a 👍 or 👎 (the ratings are what teaches, not the meh ones)
+MEH_CAP = 2  # at most this many meh clips per rated clip: meh can never outnumber what the user actually rated by much
+MEH_WEIGHT = 0.3  # a meh clip is neutral: it counts as an example, but only about a third as much as a clip that stood out (good or bad)
 KEYS = ["win", "frames", "ai", "score", "penalty", "sig.loud", "sig.hype", "sig.motion", "sig.voice", "sig.laugh", "sig.swear", "sig.novel", "sig.rate", "sig.chat", "sig.game"]
 
 
@@ -83,10 +85,13 @@ def fit(rows=None):
     import numpy as np
     rows = load_all() if rows is None else rows
     good = [r for r in rows if r["rating"] == 1]; weak = [r for r in rows if r["rating"] == -1]; meh = [r for r in rows if r["rating"] == 0]
-    if len(rows) < MIN_RATED or len(good) < MIN_EACH or len(weak) + len(meh) < MIN_EACH:
+    if len(rows) < MIN_RATED or len(good) < MIN_EACH or len(good) + len(weak) < MIN_STOOD:
         return None
+    meh = sorted(meh, key=lambda r: r["id"], reverse=True)[:MEH_CAP * (len(good) + len(weak))]  # the newest meh clips, never more than twice the rated ones
+    rows = good + weak + meh
     X = np.array([[np.nan if x is None else x for x in vec(r.get("features"))] for r in rows], dtype=float)
     y = np.array([r["rating"] for r in rows], dtype=float)
+    sw = np.where(y == 0, MEH_WEIGHT, 1.0)  # sample weights: meh is neutral, the clips that stood out drive the learning
     import warnings
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # a signal that is missing in every clip is simply ignored
@@ -96,8 +101,9 @@ def fit(rows=None):
     std = X.std(axis=0); std = np.where(std < 1e-6, 1.0, std)
     Z = (X - mean) / std
     lam = 5.0  # strong regularisation: with few ratings the nudge must stay small and sensible
-    w = np.linalg.solve(Z.T @ Z + lam * np.eye(Z.shape[1]), Z.T @ (y - y.mean()))
-    model = {"keys": KEYS, "mean": mean.tolist(), "std": std.tolist(), "w": w.tolist(), "bias": float(y.mean()), "n": len(rows), "good": len(good), "weak": len(weak), "meh": len(meh),
+    ybar = float((sw * y).sum() / sw.sum())
+    w = np.linalg.solve(Z.T @ (Z * sw[:, None]) + lam * np.eye(Z.shape[1]), Z.T @ (sw * (y - ybar)))
+    model = {"keys": KEYS, "mean": mean.tolist(), "std": std.tolist(), "w": w.tolist(), "bias": ybar, "n": len(rows), "good": len(good), "weak": len(weak), "meh": len(meh),
              "ts": dt.datetime.now().isoformat(timespec="seconds")}
     W_FILE.write_text(json.dumps(model), encoding="utf-8")
     return model
@@ -133,6 +139,6 @@ if __name__ == "__main__":
     rows = load_all()
     if len(sys.argv) > 1 and sys.argv[1] == "fit":
         m = fit(rows)
-        print(f"learned from {m['n']} clips ({m['good']} good, {m['weak']} bad, {m['meh']} meh). Strongest signals: {top_features(m)}" if m else f"Not enough clips yet ({len(rows)}, need {MIN_RATED} with at least {MIN_EACH} that stood out as good and {MIN_EACH} that did not).")
+        print(f"learned from {m['n']} clips ({m['good']} good, {m['weak']} bad, {m['meh']} meh). Strongest signals: {top_features(m)}" if m else f"Not enough yet ({len(rows)} clips; need {MIN_RATED}, with at least {MIN_EACH} 👍 and {MIN_STOOD} clips rated 👍 or 👎).")
     else:
         print(report(rows) if rows else "No clips with saved signals yet.")
