@@ -626,11 +626,95 @@ def review_edit(stem, title, desc, tags, tiktok=""):
     mf.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+WHY = ("boring", "nudity", "crop", "repeat", "other")  # why a clip was a 👎
+
+
+def clip_words(d):
+    """The words spoken in a clip, from the transcript of the job it was cut from (found by the source video id and the clip's time range)."""
+    sid, a, b = d.get("source_id"), float(d.get("start") or 0), float(d.get("end") or 0)
+    for job in sorted((R / "jobs").glob(f"{sid}-*")) if sid else []:
+        try:
+            words = json.loads((job / "transcript.json").read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        txt = " ".join(w["w"] for w in words if a <= w["s"] < b)
+        if txt.strip():
+            return txt
+    return ""
+
+
+LAYOUTS = ("blur", "facecam", "fill")
+
+
+def review_recut(stem, layout):
+    """Cut this clip again from its source with another crop (blurred background / webcam on top / fill the screen): same moment, same texts, same rating. The source video
+    is downloaded again when it was cleaned up. Runs in the background (REVIEW_STATUS shows it); the clip stays as it was when anything fails."""
+    def say(state, msg):
+        REVIEW_STATUS[stem] = {"state": state, "msg": msg}
+    try:
+        from common import job_dir, ytdlp_base, run
+        cj = REVIEW / (stem + ".json"); d = json.loads(cj.read_text(encoding="utf-8"))
+        url, pick = d["source_url"], int(stem.split("clip_")[1])
+        job = job_dir(url); src = job / "source.mp4"
+        if not src.exists():
+            say("posting", "Re-cutting this clip: downloading the source again...")
+            run(ytdlp_base(url) + ["-f", "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080]/b", "--merge-output-format", "mp4", "-o", str(src), url])
+        say("posting", f"Re-cutting this clip ({layout})...")
+        caps = ["--captions", "none"] if (d.get("no_caps") or d.get("recut")) else []
+        r = subprocess.run([str(R / ".venv" / "Scripts" / "python.exe"), "scripts/cut.py", str(job), "--pick", str(pick), "--layout", layout, "--hook", d.get("hook", ""),
+                            "--start", str(d["start"]), "--end", str(d["end"]), *caps], cwd=R, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800,
+                           env={**os.environ, "PYTHONUTF8": "1", "CLIP_DESK_HOME": str(R)}, creationflags=0x08000000)
+        new = job / "edits" / f"clip_{pick}.mp4"
+        if r.returncode != 0 or not new.exists():
+            raise RuntimeError("The cut failed" + (" (no webcam found in this video?)" if layout == "facecam" else "") + ": " + (r.stderr or r.stdout or "")[-160:])
+        for _ in range(10):  # the page may still be holding the old video for a moment
+            try:
+                shutil.copy2(new, REVIEW / (stem + ".mp4")); break
+            except PermissionError:
+                time.sleep(1)
+        else:
+            raise RuntimeError("Could not replace the video (is it playing in another window?)")
+        nj = json.loads((job / "edits" / f"clip_{pick}.json").read_text(encoding="utf-8"))
+        for k in ("trim", "orig_seconds"):
+            d.pop(k, None)
+        d["layout"] = layout; d["seconds"] = round(float(nj.get("end", d["end"])) - float(nj.get("start", d["start"])), 1)
+        cj.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+        (REVIEW / (stem + ".orig")).unlink(missing_ok=True)
+        review_unpost(stem)  # a re-cut is a new video: it can be posted again (delete the old online one first)
+        REVIEW_STATUS.pop(stem, None)
+    except Exception as e:
+        say("error", "Re-cut failed, the clip is unchanged: " + str(e)[:220])
+
+
+def review_rejoke(stem):
+    """Ask the AI title writer for a different one-line joke for this clip (the same writer and the same data as a normal run: the clip's words + the source title) and
+    put it in the title and the first description line. Returns the new line. Raises ValueError with a plain message."""
+    cj = REVIEW / (stem + ".json")
+    d = json.loads(cj.read_text(encoding="utf-8"))
+    mf = REVIEW / (stem.replace("clip_", "meta_") + ".json")
+    meta = json.loads(mf.read_text(encoding="utf-8")) if mf.exists() else {}
+    cfg = read_cfg()
+    if cfg.get("title_writer") not in ("claude", "api"):
+        raise ValueError("A new joke needs the AI title writer: choose one in Settings (Claude or your own API key).")
+    text = clip_words(d)
+    if not text:
+        raise ValueError("The words of this clip are no longer on this PC, so no new joke can be written. Use Edit text instead.")
+    ai = ai_title.write(cfg, text, d.get("source_channel") or "", d.get("source_title") or "")
+    if not ai:
+        raise ValueError("The AI title writer did not answer (key, sign-in or limit). Try again in a moment.")
+    line = ai["tiktok_line"][:85].strip()
+    et, ed, eg = split_meta(meta)
+    rest = [x for x in ed.splitlines()]
+    rest = rest[1:] if rest and not rest[0].startswith("🎮") else rest
+    review_edit(stem, line, chr(10).join([line] + rest), eg, meta.get("tiktok_custom", ""))
+    return line
+
+
 def log_rating(stem, d, rating, removed=False):
     """One line in ratings.jsonl (local only): the clip's rating (+1 stood out good, -1 stood out bad, 0 meh) with the signals behind it. The log outlives the clip."""
     with open(R / "ratings.jsonl", "a", encoding="utf-8") as fh:
         fh.write(json.dumps({"id": stem, "rating": rating, "ts": dt.datetime.now().isoformat(timespec="seconds"), "rank": d.get("rank"), "features": d.get("features"),
-                             "seconds": d.get("seconds"), "creator": d.get("source_channel") or d.get("creator"), **({"removed": True} if removed else {})}, ensure_ascii=False) + chr(10))
+                             "seconds": d.get("seconds"), "creator": d.get("source_channel") or d.get("creator"), **({"reason": d["reason"]} if d.get("reason") else {}), **({"removed": True} if removed else {})}, ensure_ascii=False) + chr(10))
 
 
 _LEARN = {"t": 0.0, "v": None}
@@ -675,7 +759,7 @@ def review_items():
             et, ed, eg = split_meta(meta)
             out.append({"id": f.stem, "title": meta.get("yt_title", ""), "desc": meta.get("yt_description", ""), "caption": meta.get("tiktok_caption", ""),
                         "edit_title": et, "edit_desc": ed, "edit_tags": " ".join(eg), "edit_tiktok": meta.get("tiktok_custom", ""), "edited": bool(meta.get("edited")),
-                        "seconds": d.get("seconds"), "layout": d.get("layout"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
+                        "seconds": d.get("seconds"), "layout": d.get("layout"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "flags": d.get("flags") or [], "reason": d.get("reason"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
                         "posted": json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {}, "status": REVIEW_STATUS.get(f.stem)})
         except Exception:
             continue
@@ -764,6 +848,51 @@ def review_schedule(stem, at, mode):
     cj.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+def plan_slots(now, n, per_day, start, end, gap, taken):
+    """n posting times from `now` on: each day from `start` to `end` (HH:MM), at least `gap` minutes apart, at most `per_day` posts a day counting the times already in
+    `taken` (scheduled or posted). Never in the past. Looks 21 days ahead."""
+    sh, sm = map(int, start.split(":")); eh, em = map(int, end.split(":"))
+    out = []
+    for k in range(21):
+        day = (now + dt.timedelta(days=k)).date()
+        t, close = dt.datetime.combine(day, dt.time(sh, sm)), dt.datetime.combine(day, dt.time(eh, em))
+        mine = sorted(x for x in taken if x.date() == day)
+        count = len(mine)
+        while t <= close and len(out) < n and count < per_day:
+            if t > now + dt.timedelta(minutes=2) and all(abs((t - x).total_seconds()) >= gap * 60 for x in mine + [o for o in out if o.date() == day]):
+                out.append(t); count += 1
+            t += dt.timedelta(minutes=15)
+        if len(out) >= n:
+            break
+    return out
+
+
+def review_autoschedule(mode, now=None):
+    """Give every waiting clip (not posted, not scheduled), best rank first, a time that respects the daily limit and the posting window from Settings. Returns how many."""
+    if mode not in ("private", "public"):
+        raise ValueError("bad visibility")
+    now, c = now or dt.datetime.now(), read_cfg()
+    taken, todo = [], []
+    for f in REVIEW.glob("*__clip_*.json"):
+        if f.name.endswith(".posted.json") or not f.with_suffix(".mp4").exists():
+            continue
+        d = json.loads(f.read_text(encoding="utf-8"))
+        if (REVIEW_STATUS.get(f.stem) or {}).get("state") == "posting":
+            continue
+        pf = f.with_name(f.stem + ".posted.json")
+        if pf.exists():
+            taken.append(dt.datetime.fromtimestamp(pf.stat().st_mtime))
+        elif d.get("scheduled"):
+            taken.append(dt.datetime.fromisoformat(d["scheduled"]["at"]))
+        else:
+            todo.append((-(float(d.get("rank") or 0)), f.stem))
+    todo.sort()
+    slots = plan_slots(now, len(todo), int(c.get("posts_per_day", 6)), c.get("window_start", "09:00"), c.get("window_end", "22:30"), int(c.get("min_gap_minutes", 120)), taken)
+    for (_, stem), when in zip(todo, slots):
+        review_schedule(stem, when.isoformat(), mode)
+    return len(slots)
+
+
 def review_unschedule(stem):
     cj = REVIEW / (stem + ".json")
     if cj.exists():
@@ -803,6 +932,19 @@ def sched_tick(now=None):
     for stem, mode in started:
         threading.Thread(target=review_post, args=(stem, mode), daemon=True).start()
     return [x[0] for x in started]
+
+
+def views_loop():
+    """About once an hour: read the public view counts of clips that were posted 2+ days ago (scripts/views.py), then learn from them."""
+    while True:
+        time.sleep(120)
+        try:
+            import views
+            if views.refresh():
+                learn_refit()
+        except Exception:
+            pass
+        time.sleep(3500)
 
 
 def sched_loop():
@@ -1030,6 +1172,32 @@ class H(http.server.BaseHTTPRequestHandler):
                 review_edit(stem, body.get("title", ""), body.get("description", ""), str(body.get("hashtags", "")).split(), body.get("tiktok", ""))
             except ValueError as e:
                 return self.send(400, str(e), "text/plain")
+        elif self.path == "/api/review/recut":
+            try:
+                body = json.loads(self.rfile.read(n)); stem = body["id"]; layout = body["layout"]; assert STEM.match(stem) and layout in LAYOUTS and (REVIEW / (stem + ".mp4")).exists()
+            except Exception:
+                return self.send(400, "bad values", "text/plain")
+            if (REVIEW_STATUS.get(stem) or {}).get("state") == "posting" or (R / "post.lock").exists():
+                return self.send(409, "Busy: wait until the current post or re-cut has finished", "text/plain")
+            REVIEW_STATUS[stem] = {"state": "posting", "msg": "Re-cutting this clip..."}
+            threading.Thread(target=review_recut, args=(stem, layout), daemon=True).start()
+        elif self.path == "/api/review/rejoke":
+            try:
+                stem = json.loads(self.rfile.read(n))["id"]; assert STEM.match(stem) and (REVIEW / (stem + ".mp4")).exists()
+            except Exception:
+                return self.send(400, "bad id", "text/plain")
+            if (REVIEW_STATUS.get(stem) or {}).get("state") == "posting":
+                return self.send(409, "This clip is being posted right now", "text/plain")
+            try:
+                return self.send(200, json.dumps({"line": review_rejoke(stem)}))
+            except ValueError as e:
+                return self.send(400, str(e), "text/plain")
+        elif self.path == "/api/review/autoschedule":
+            try:
+                k = review_autoschedule(json.loads(self.rfile.read(n)).get("mode", "private"))
+            except (ValueError, KeyError, TypeError) as e:
+                return self.send(400, str(e) or "bad values", "text/plain")
+            return self.send(200, json.dumps({"scheduled": k}))
         elif self.path in ("/api/review/schedule", "/api/review/schedule/cancel", "/api/review/unpost"):
             try:
                 body = json.loads(self.rfile.read(n)); stem = body["id"]; assert STEM.match(stem)
@@ -1066,6 +1234,9 @@ class H(http.server.BaseHTTPRequestHandler):
             try:
                 body = json.loads(self.rfile.read(n)); stem = body["id"]; assert STEM.match(stem) and body["rating"] in (-1, 0, 1)
                 cf = REVIEW / (stem + ".json"); d = json.loads(cf.read_text(encoding="utf-8")); d["rating"] = body["rating"]
+                d.pop("reason", None)
+                if body["rating"] == -1 and body.get("reason") in WHY:
+                    d["reason"] = body["reason"]
                 cf.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
                 log_rating(stem, d, body["rating"]); learn_refit()
             except Exception:
@@ -1163,6 +1334,7 @@ if __name__ == "__main__":
         threading.Thread(target=update_loop, daemon=True).start()
         threading.Thread(target=autopilot_loop, daemon=True).start()
         threading.Thread(target=sched_loop, daemon=True).start()
+        threading.Thread(target=views_loop, daemon=True).start()
         threading.Thread(target=live_loop, daemon=True).start()
         threading.Thread(target=stats_loop, daemon=True).start()
     print(f"Clippy dashboard on http://127.0.0.1:{PORT}  (Ctrl+C to stop)")

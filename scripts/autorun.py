@@ -343,6 +343,11 @@ def queue_for_review(clip):
     stem = f"{int(time.time())}__{clip.stem}"  # must keep "clip_N": post_clip.py derives the meta file name from it
     shutil.copy2(clip, REVIEW / f"{stem}.mp4")
     d = json.loads(clip.with_suffix(".json").read_text(encoding="utf-8")); d["file"] = str(REVIEW / f"{stem}.mp4")
+    try:
+        import safety_check
+        d["flags"] = safety_check.flags(d)  # a hint on the clip card, never a block
+    except Exception:
+        pass
     (REVIEW / f"{stem}.json").write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
     sh([PY, "scripts/make_meta.py", str(REVIEW / f"{stem}.json")])
     return stem
@@ -606,7 +611,7 @@ def try_candidate(v, score, job, n, c, creator, dry, memo=None, review_only=Fals
     try:  # short catchy description: the AI one-liner goes into clip_N.json, make_meta.py uses it (no transcript text in descriptions); a stale meta file is dropped
         cj = clip.with_suffix(".json"); d0 = json.loads(cj.read_text(encoding="utf-8")); d0["blurb"] = blurb or ""
         d0.update({"source_id": v["id"], "origin": ORIGIN, "score": score, "creator": creator or "", "seconds": round(d0.get("end", 0) - d0.get("start", 0), 1),
-                   "rank": round(jd["rank"], 2), "features": jd.get("feat")})  # the signals behind this clip: logged with the user's rating to learn what works
+                   "rank": round(jd["rank"], 2), "features": jd.get("feat"), "no_caps": bool(jd.get("has_caps"))})  # the signals behind this clip: logged with the user's rating to learn what works
         cj.write_text(json.dumps(d0, ensure_ascii=False, indent=1), encoding="utf-8")
         clip.with_name(clip.name.replace("clip_", "meta_")).with_suffix(".json").unlink(missing_ok=True)
     except Exception as e:

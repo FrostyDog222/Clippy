@@ -412,6 +412,37 @@ def test_scheduled_posting_and_mark_as_not_posted():
         d.REVIEW, d.review_post, d.threading.Thread = keep[0], keep[1], keep[3]; d.REVIEW_STATUS.clear(); d.REVIEW_STATUS.update(keep[2])
 
 
+def test_new_helpers_views_flags_slots_reason():
+    import datetime as dtm, json, sys, tempfile
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d, views, safety_check, learn
+    # view counts: a hit, a miss and the middle; too few clips -> nothing
+    rows = [{"id": str(i), "views": v, "features": {"a": 1}} for i, v in enumerate([100, 120, 110, 900, 20])]
+    r = views.derived(rows)
+    assert r["3"] == (1, 0.5) and r["4"] == (-1, 0.5) and r["0"] == (0, 0.5) and views.derived(rows[:3]) == {}, r
+    # a clip posted less than 48 h ago is not read; an old one is, and its count is stored once
+    tmp = Path(tempfile.mkdtemp()); (tmp / "review").mkdir(); old = (views.REVIEW, views.LOG); views.REVIEW, views.LOG = tmp / "review", tmp / "views.jsonl"
+    try:
+        import time as tm
+        for stem, age in (("1795000001__clip_1", 10), ("1795000002__clip_1", 60)):
+            pf = views.REVIEW / f"{stem}.posted.json"; pf.write_text(json.dumps({"youtube": "https://youtube.com/shorts/x"}))
+            import os; os.utime(pf, (tm.time() - age * 3600, tm.time() - age * 3600))
+        assert views.refresh(lambda u: 777) == 1 and views.load()[0]["views"] == 777 and views.refresh(lambda u: 5) == 0
+    finally:
+        views.REVIEW, views.LOG = old
+    # adult words are flagged, normal text is not; swearing is never flagged
+    assert safety_check.flags({"hook": "Streamer finds a strip club"}) and not safety_check.flags({"hook": "holy f*** that crash"})
+    # posting slots: respect the window, the gap and the daily limit (already-taken times count)
+    now = dtm.datetime(2026, 11, 22, 8, 0)
+    taken = [dtm.datetime(2026, 11, 22, 9, 0), dtm.datetime(2026, 11, 22, 11, 0)]
+    sl = d.plan_slots(now, 5, 3, "09:00", "22:30", 120, taken)
+    assert len(sl) == 5 and sl[0] == dtm.datetime(2026, 11, 22, 13, 0) and sl[1].date() == dtm.date(2026, 11, 23), sl  # 1 slot left today (limit 3), then a new day
+    assert all(b - a >= dtm.timedelta(minutes=120) for a, b in zip(sl, sl[1:]) if a.date() == b.date())
+    assert all(dtm.time(9, 0) <= x.time() <= dtm.time(22, 30) for x in sl)
+    # a thumbs-down for a reason that is not about the moment counts less in learning
+    assert "nudity" in learn.OFF_MOMENT and "boring" not in learn.OFF_MOMENT and "boring" in d.WHY
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

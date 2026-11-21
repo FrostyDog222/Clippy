@@ -33,6 +33,9 @@ def flat(d, pre=""):
             yield pre + k, float(v)
 
 
+OFF_MOMENT = ("nudity", "crop", "repeat")
+
+
 def channel_of(r):
     f = r.get("features") or {}
     return str(f.get("channel") or r.get("creator") or "").strip().lower()
@@ -64,7 +67,17 @@ def load_all():
         if not d.get("features"):
             continue  # clips from before the signals were saved cannot teach anything
         rows[f.stem] = {"id": f.stem, "rating": d.get("rating") if d.get("rating") in (1, -1) else 0, "rank": d.get("rank"), "features": d.get("features"),
-                        "seconds": d.get("seconds"), "creator": d.get("source_channel") or d.get("creator")}
+                        "seconds": d.get("seconds"), "creator": d.get("source_channel") or d.get("creator"), "reason": d.get("reason") if d.get("rating") == -1 else None}
+    try:  # how the posted clips did (views.py): a weaker second teacher, only where the user did not rate the clip
+        import views
+        vr = views.load(); byid = {r["id"]: r for r in vr}
+        for i, (rt, w) in views.derived(vr).items():
+            if i not in rows:
+                v = byid[i]; rows[i] = {"id": i, "rating": rt, "w": w, "rank": v.get("rank"), "features": v.get("features"), "seconds": v.get("seconds"), "creator": v.get("creator")}
+            elif rows[i]["rating"] == 0:
+                rows[i] = dict(rows[i], rating=rt, w=w)
+    except Exception:
+        pass
     return list(rows.values())
 
 
@@ -129,6 +142,8 @@ def fit(rows=None):
     X = np.array([[np.nan if x is None else x for x in vec(r.get("features"))] for r in rows], dtype=float)
     y = np.array([r["rating"] for r in rows], dtype=float)
     sw = np.where(y == 0, MEH_WEIGHT, 1.0)  # meh is neutral: the clips that stood out drive the learning
+    sw = sw * np.array([r.get("w", 1.0) for r in rows])
+    sw = np.where([r.get("reason") in OFF_MOMENT for r in rows], 0.35, sw)  # a 👎 for nudity / crop / a repeated joke says little about the MOMENT itself
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # a signal that is missing in every clip is simply ignored
         mean = np.nanmean(X, axis=0)
