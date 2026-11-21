@@ -20,7 +20,7 @@ import cv2
 import numpy as np
 
 MODEL_URL = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
-MODEL = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache")) / "gtavi-claudecode" / "models" / "face_detection_yunet_2023mar.onnx"
+MODEL = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache")) / "Clippy" / "models" / "face_detection_yunet_2023mar.onnx"
 MODEL_SHA256 = "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4"
 N_FRAMES = 12
 MAX_W = 1280  # analysis width
@@ -29,7 +29,7 @@ MAX_W = 1280  # analysis width
 def model_path():
     import hashlib
     # known places, checked by hash: shipped with the release, the profile cache (also when LOCALAPPDATA is missing/redirected in a background process)
-    for p in (Path(__file__).resolve().parent.parent / "models" / MODEL.name, MODEL, Path.home() / "AppData" / "Local" / "gtavi-claudecode" / "models" / MODEL.name):
+    for p in (Path(__file__).resolve().parent.parent / "models" / MODEL.name, MODEL, Path.home() / "AppData" / "Local" / "Clippy" / "models" / MODEL.name, Path.home() / "AppData" / "Local" / "gtavi-claudecode" / "models" / MODEL.name):
         try:
             if p.exists() and hashlib.sha256(p.read_bytes()).hexdigest() == MODEL_SHA256:
                 return str(p)

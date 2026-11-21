@@ -9,7 +9,7 @@ Exit code 0 = clean, 1 = findings."""
 import hashlib, importlib.util, json, pathlib, re, sys
 
 R = pathlib.Path(__file__).resolve().parent.parent
-SKIP = re.compile(r"[\\/](\.venv|jobs|chrome_profile|logs|\.git|__pycache__|api_tokens|release|legacy_claude_mode)[\\/]")
+SKIP = re.compile(r"[\\/](\.venv|jobs|chrome_profile|logs|\.git|__pycache__|api_tokens|release)[\\/]")
 EXT = {".py", ".bat", ".cmd", ".ps1", ".js", ".html"}
 spec = importlib.util.spec_from_file_location("ng", R / "scripts" / "netguard.py"); ng = importlib.util.module_from_spec(spec); spec.loader.exec_module(ng)
 ALLOWED_HOSTS = set(ng.BASE) | set(ng.PYPI) | {"localhost", "127.0.0.1", "github.com", "raw.githubusercontent.com", "huggingface.co", "www.w3.org", "anthropic.com",
