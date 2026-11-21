@@ -782,7 +782,7 @@ def review_recut(stem, layout, nocaps=False):
         for k in ("trim", "orig_seconds"):
             d.pop(k, None)
         if nocaps:
-            d["no_caps"] = True  # the source has its own captions: Clippy's are left off from now on
+            d["no_caps"] = True; d.pop("captions_off", None)  # the source has its own captions: Clippy's are left off from now on
         d["layout"] = layout; d["seconds"] = round(float(nj.get("end", d["end"])) - float(nj.get("start", d["start"])), 1)
         cj.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
         (REVIEW / (stem + ".orig")).unlink(missing_ok=True)
@@ -865,7 +865,7 @@ def review_items():
             et, ed, eg = split_meta(meta)
             out.append({"id": f.stem, "title": meta.get("yt_title", ""), "desc": meta.get("yt_description", ""), "caption": meta.get("tiktok_caption", ""),
                         "edit_title": et, "edit_desc": ed, "edit_tags": " ".join(eg), "edit_tiktok": meta.get("tiktok_custom", ""), "edited": bool(meta.get("edited")),
-                        "seconds": d.get("seconds"), "layout": d.get("layout"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "reviewed": bool(d.get("reviewed") or d.get("rating") in (1, -1)), "reason": d.get("reason"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
+                        "seconds": d.get("seconds"), "layout": d.get("layout"), "captions_off": d.get("captions_off"), "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "reviewed": bool(d.get("reviewed") or d.get("rating") in (1, -1)), "reason": d.get("reason"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
                         "posted": json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {}, "status": REVIEW_STATUS.get(f.stem)})
         except Exception:
             continue

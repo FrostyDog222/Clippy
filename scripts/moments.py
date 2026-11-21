@@ -137,7 +137,17 @@ def transcribe(wav, d):
         model = WhisperModel("small", device=device, compute_type="float16" if device == "cuda" else "int8")
         segs, tinfo = model.transcribe(pcm, word_timestamps=True, vad_filter=True)
         save_json(d / "lang.json", {"language": tinfo.language, "p": round(float(tinfo.language_probability), 2)})  # English-only pipeline: see main()
-        return [{"w": w.word.strip(), "s": round(w.start, 2), "e": round(w.end, 2)} for s in segs for w in (s.words or [])]
+        out_words = [{"w": w.word.strip(), "s": round(w.start, 2), "e": round(w.end, 2)} for s in segs for w in (s.words or [])]
+        if tinfo.language != "en" or float(tinfo.language_probability) < 0.8:  # not clearly English: streamers switch languages mid-speech, so detect the language window by window
+            try:
+                segs2, _ = model.transcribe(pcm, word_timestamps=True, vad_filter=True, multilingual=True)
+                w2 = [{"w": w.word.strip(), "s": round(w.start, 2), "e": round(w.end, 2)} for s in segs2 for w in (s.words or [])]
+                if w2:
+                    out_words = w2
+                    save_json(d / "lang.json", {"language": tinfo.language, "p": round(float(tinfo.language_probability), 2), "multilingual": True})
+            except Exception as e:
+                print(f"multilingual pass skipped ({str(e)[:60]})")
+        return out_words
     try:
         words = run_on("cuda" if cuda else "cpu")
     except RuntimeError as e:  # GPU present but CUDA libraries missing: fall back to CPU
@@ -258,7 +268,12 @@ def main():
         allowed = allowed_languages(json.loads((Path(__file__).resolve().parent.parent / "autopost_config.json").read_text(encoding="utf-8")))
     except Exception:
         allowed = ["en"]
-    if allowed is not None and lang["language"] not in allowed and lang["p"] >= 0.5:  # config "languages": skip anything not picked, never cut it
+    try:
+        import langkit
+        lang_reject = allowed is not None and not langkit.moment_allowed(lang, words, allowed)
+    except Exception:
+        lang_reject = allowed is not None and lang["language"] not in allowed and lang["p"] >= 0.5
+    if lang_reject:  # config "languages": skip anything not picked, never cut it
         save_json(d / "candidates.json", {"source": str(vid), "info": load_json(d / "info.json"), "duration": dur, "candidates": [], "signals": {}})
         print(f"job: {d}\nLANGUAGE {lang['language']} ({lang['p']}) is not in your language list: skipping this source\n0 candidates (0 strong)")
         return
@@ -364,6 +379,12 @@ def main():
             s0 = max(0, s0 - (a.min - (e0 - s0)))
             e0 = max(e0, min(dur, s0 + a.min))
         e0 = min(e0, s0 + a.max)
+        try:
+            import langkit
+            if allowed is not None and not langkit.moment_allowed(lang, [x for x in words if s0 <= x["s"] < e0], allowed):
+                continue
+        except Exception:
+            pass
         if used[int(s0):int(e0)].any():
             continue
         used[max(0, int(s0) - 12):int(e0) + 12] = True  # picks stay at least 12 s apart: no two clips of the same moment

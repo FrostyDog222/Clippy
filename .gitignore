@@ -1,54 +1,21 @@
-# nothing personal, nothing downloaded, nothing generated ever goes in this repo
 .venv/
 __pycache__/
-*.pyc
 jobs/
-review/
-release/
-logs/
+test/
+*.mp4
+*.wav
+*.ts
+!docs/*.mp4
+
 chrome_profile/
 api_tokens/
-*.dpapi
-# settings and state of one user's installation
-autopost_config.json
-autopost_state.json
-autopost_log.md
+logs/
 progress.json
-signin_status.json
-headless_check.json
-search_cache.json
-yt_block.json
-run_history.json
-suspended.json
-autorun.pid
-post.lock
 PAUSED.txt
-*.log
-.release_scrub.txt
-.env
-# media
-*.mp4
-*.mkv
-*.webm
-*.mov
-*.wav
-*.mp3
-*.m4a
-*.ts
-*.npy
-
-# what Clippy learned from one user: private, never uploaded (ratings, learned model, views, duplicate memory)
+autopost_state.json
+views.jsonl
 ratings.jsonl
 learned_weights.json
-views.jsonl
 seen_moments.jsonl
-# more local state
 yt_limit.json
 autopilot_hold.txt
-update_state.json
-update_backup/
-version.json
-live_status.json
-.no_update
-netguard.log
-clippy-backup-*.json

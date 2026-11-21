@@ -821,6 +821,29 @@ def test_stream_language_is_checked_for_youtube_too():
         assert lw.pick_other(found, [], {}, "x", lambda s: lw.stream_language_allowed(s, cfg))["channel"] == "En"
 
 
+def test_langkit_rules():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import langkit as L
+    W = lambda s: s.split()
+    ro_mix = W("Omule ce se intampla acum wtf bro nu pot sa cred what the fuck incredibil")
+    ro = W("Omule ce se intampla acum nu pot sa cred este incredibil cum a facut asta")
+    en = W("oh my god did you see that he just drove the car off the bridge")
+    assert L.tag("what") == "en" and L.tag("Ahora") == "latin" and L.tag("привет") == "cyrillic" and L.tag("안녕") == "hangul" and L.tag("42") is None
+    assert L.moment_allowed({"language": "ro", "p": 0.95}, ro_mix, ["en"])                 # an English burst inside Romanian counts (25%+ of the words)
+    assert not L.moment_allowed({"language": "ro", "p": 0.95}, ro, ["en"])                 # sure it is Romanian, no English in it: rejected
+    assert L.moment_allowed({"language": "ro", "p": 0.55}, ro, ["en"])                     # unsure: never rejected
+    assert L.moment_allowed({"language": "ro", "p": 0.95}, ro, None) and L.moment_allowed({"language": "en", "p": 0.99}, en, ["en"])
+    assert L.moment_allowed({"language": "ro", "p": 0.9}, ro, ["en", "ro"])                # allowed language
+    assert L.caption_plan({"language": "en", "p": 0.97}, en)["captions"] and L.caption_plan({"language": "ro", "p": 0.9}, ro)["captions"]   # sure: captions as always
+    assert L.caption_plan({"language": "en", "p": 0.37}, en)["captions"]                   # unsure but English-looking: English captions as before
+    p = L.caption_plan({"language": "nn", "p": 0.26}, ro)
+    assert not p["captions"] and p["unsure"]                                                # unsure and not English-looking: no captions, flagged
+    assert L.caption_plan({"language": "en", "p": 0.3}, W("ok yes"))["captions"]            # almost no words: nothing to doubt
+    assert L.upper("istanbul ısı", "tr") == "İSTANBUL ISI" and L.upper("istanbul") == "ISTANBUL"
+    assert L.font_for_script("cyrillic") is None and L.font_for_script("hangul", r"C:\nowhere") is None
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

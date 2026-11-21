@@ -51,7 +51,36 @@ def wrap(text, width):
     return lines + ([cur] if cur else [])
 
 
-def build_ass(words, s0, e0, hook, cap_y, title=None, caps='word', profanity=False):
+def _fonts(text):
+    """Words in a script Arial cannot draw (Arabic, Korean, Japanese, Chinese, Hindi) get a Windows font that can; everything else is returned untouched."""
+    try:
+        import langkit
+    except Exception:
+        return text
+    out = []
+    for tok in text.split(' '):
+        f = langkit.font_for_script(langkit.script_of(tok))
+        out.append("{\\fn" + f + "}" + tok + "{\\fn}" if f else tok)
+    return ' '.join(out)
+
+
+def _rtl(g):
+    try:
+        import langkit
+        return all(langkit.script_of(x["w"]) == "arabic" for x in g)
+    except Exception:
+        return False
+
+
+def _upper(text, lang):
+    try:
+        import langkit
+        return langkit.upper(text, lang)
+    except Exception:
+        return text.upper()
+
+
+def build_ass(words, s0, e0, hook, cap_y, title=None, caps='word', profanity=False, lang=None):
     hdr = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {W}
@@ -89,12 +118,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 continue
             parts = []
             for j, x in enumerate(g):
-                t = esc(x["w"].upper())
+                t = _fonts(esc(_upper(x["w"], lang)))
                 parts.append("{\\c&H0000E5FF&}" + t + "{\\c&H00FFFFFF&}" if j == k else t)
             pop = "{\\fscx112\\fscy112\\t(0,90,\\fscx100\\fscy100)}" if k == 0 else ""
+            if _rtl(g):
+                parts.reverse()  # this ffmpeg lays words out left to right: Arabic lines are put in reading order by hand
             if caps == 'bubble':
                 if k == 0:
-                    txt = esc(' '.join(x['w'] for x in g)).strip()
+                    txt = _fonts(esc(' '.join(x['w'] for x in (g[::-1] if _rtl(g) else g)))).strip()
                     txt = txt[:1].upper() + txt[1:]
                     ev.append(f"Dialogue: 0,{ts(a)},{ts(g_end - s0)},Bubble,,0,0,0,,{{\\pos({W // 2},{cap_y})}}{pop}{txt}")
                 continue
@@ -104,7 +135,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         end = (e0 - s0) if secs <= 0 else secs
         if st == 'outline':  # big caps; one key word (GTA 6 if present, else the longest word) in yellow like the reference style
             text = text.upper()
-        lines = wrap(esc(text), 26 if st == 'box' else 24)
+        lines = [_fonts(ln) for ln in wrap(esc(text), 26 if st == 'box' else 24)]
         body = '\\N'.join(lines)
         if st == 'outline':
             key = 'GTA 6' if 'GTA 6' in body else max(body.replace('\\N', ' ').split(), key=len, default='')
@@ -116,7 +147,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             ev.append(f"Dialogue: 2,{ts(0)},{ts(end)},TitleOut,,0,0,0,,{{\\pos({W // 2},{ty})\\an8}}{body}")
         hook = ''
     if hook:
-        ev.append(f"Dialogue: 1,{ts(0)},{ts(hook_end)},Hook,,0,0,0,,{{\\fad(0,180)\\fscx92\\fscy92\\t(0,120,\\fscx100\\fscy100)}}{esc(hook)}")
+        ev.append(f"Dialogue: 1,{ts(0)},{ts(hook_end)},Hook,,0,0,0,,{{\\fad(0,180)\\fscx92\\fscy92\\t(0,120,\\fscx100\\fscy100)}}{_fonts(esc(hook))}")
     return hdr + "\n".join(ev) + "\n"
 
 
@@ -340,8 +371,21 @@ def main():
         cap_y = 1500  # keep the word captions clear of the seam title
     ass = out / f"clip_{a.pick}.ass"
     caps = a.captions
+    lang_code, captions_off = None, None
+    try:
+        import langkit
+        lf = d / "lang.json"
+        info = load_json(lf) if lf.exists() else None
+        lang_code = (info or {}).get("language") if langkit.trusted(info) else None
+        if caps != 'none' and info:
+            plan = langkit.caption_plan(info, [w for w in words if s0 <= w["s"] < e0])
+            if not plan["captions"]:
+                caps, captions_off = 'none', plan["reason"]
+                print(f"captions: {plan['reason']}: leaving the captions off")
+    except Exception as ex:
+        print(f"captions: language check skipped ({str(ex)[:60]})")
     cap_words = words if caps != 'none' else []
-    ass.write_text(build_ass(cap_words, s0, e0, "", cap_y, title=title, caps=caps, profanity=a.allow_profanity), encoding="utf-8")
+    ass.write_text(build_ass(cap_words, s0, e0, "", cap_y, title=title, caps=caps, profanity=a.allow_profanity, lang=lang_code), encoding="utf-8")
     src = None; gx = None
     if layout == 'react':
         from common import ffprobe
@@ -370,7 +414,8 @@ def main():
     info = c.get("info", {})
     save_json(out / f"clip_{a.pick}.json", {"file": str(mp4), "start": s0, "end": e0, "layout": layout, "hook": a.hook or a.title, "title": a.title, "cam": cam,
                                             "source_url": info.get("webpage_url"), "source_title": info.get("title"),
-                                            "source_channel": info.get("channel") or info.get("uploader")})
+                                            "source_channel": info.get("channel") or info.get("uploader"),
+                                            **({"captions_off": captions_off} if captions_off else {})})
     print(mp4)
 
 

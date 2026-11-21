@@ -643,7 +643,11 @@ def try_candidate(v, score, job, n, c, creator, dry, memo=None, review_only=Fals
     progress(65, "Clip checked")
     if dry:
         progress(100, f"Dry run: would post {clip.name}"); log(f"DRY RUN: {clip}"); return 0
-    if review_only or not CFG.get("auto_post", False):  # a near-miss is never posted by itself; "Post videos automatically" OFF: the clip waits in the dashboard (Ready to post) for the user's Post button
+    try:
+        unsure = bool(json.loads(clip.with_suffix(".json").read_text(encoding="utf-8")).get("captions_off"))  # language unsure: a person looks at it first, never posted by itself
+    except Exception:
+        unsure = False
+    if review_only or unsure or not CFG.get("auto_post", False):  # a near-miss is never posted by itself; "Post videos automatically" OFF: the clip waits in the dashboard (Ready to post) for the user's Post button
         stem = queue_for_review(clip)
         progress(100, "Clip ready in the dashboard: press Post to publish it"); log(f"READY FOR REVIEW: {stem}")
         return 0
