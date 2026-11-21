@@ -351,6 +351,13 @@ def queue_for_review(clip):
                 shutil.copy2(raw, REVIEW / f"{stem}.raw"); d["job"] = str(job); d["raw_src"] = str(raw)
         except Exception as e:
             log(f"  could not keep the raw clip ({str(e)[:60]}): Crop / Rebuild will not work for it")
+    elif d.get("start") is not None and d.get("end") is not None:  # a video / VOD clip: keep a short raw piece around it (no captions) so a rebuild needs no new download; deleted with the clip
+        try:
+            import rawkeep
+            if rawkeep.make_kit(clip.parent.parent, d, int(clip.stem.split("_")[1]), REVIEW / f"{stem}.raw", REVIEW / f"{stem}.kit"):
+                d["kit"] = True
+        except Exception as e:
+            log(f"  could not keep the raw piece ({str(e)[:60]}): a rebuild will download the video again")
     (REVIEW / f"{stem}.json").write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
     sh([PY, "scripts/make_meta.py", str(REVIEW / f"{stem}.json")])
     try:  # remember this moment (and its streamer) so the same one is never made twice

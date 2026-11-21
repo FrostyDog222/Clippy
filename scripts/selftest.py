@@ -899,6 +899,23 @@ def test_live_clip_keeps_raw_footage_until_removed():
         autorun.REVIEW, d.REVIEW = kr, kd
 
 
+def test_video_clip_raw_piece_is_shifted_and_restored():
+    import sys, tempfile, json, subprocess
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import rawkeep
+    from common import tool
+    tmp = Path(tempfile.mkdtemp()); job = tmp / "job"; job.mkdir()
+    src = job / "source.mp4"
+    subprocess.run([tool("ffmpeg"), "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc=s=320x240:r=10:d=40", "-f", "lavfi", "-i", "sine=d=40", "-shortest", "-c:v", "libx264", "-c:a", "aac", str(src)], check=True)
+    (job / "candidates.json").write_text(json.dumps({"source": str(src), "info": {"title": "t"}, "candidates": [{"n": 2, "start": 20.0, "end": 30.0}]}))
+    (job / "transcript.json").write_text(json.dumps([{"w": "hi", "s": 21.0, "e": 21.4}, {"w": "far", "s": 2.0, "e": 2.3}]))
+    assert rawkeep.make_kit(job, {"start": 20.0, "end": 30.0}, 2, tmp / "r.raw", tmp / "r.kit")
+    j, s, e, off, pick = rawkeep.restore_job(tmp / "r.kit", tmp / "r.raw", tmp / "w")
+    assert off == 14.0 and (s, e, pick) == (6.0, 16.0, 2)                                   # times are shifted by the piece's start
+    assert [w["w"] for w in json.loads((j / "transcript.json").read_text())] == ["hi"] and json.loads((j / "transcript.json").read_text())[0]["s"] == 7.0
+    assert (j / "source.mp4").exists() and 15 < float(subprocess.run([tool("ffprobe"), "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(j / "source.mp4")], capture_output=True, text=True).stdout) < 25
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

@@ -666,7 +666,7 @@ def review_purge():
         try:
             sf = f.with_suffix(".posted.json")
             if not f.with_suffix(".json").exists() or (sf.exists() and any(json.loads(sf.read_text(encoding="utf-8")).values())):
-                review_unlink(f, 1)
+                review_unlink(f, 1); review_unlink(f.with_suffix(".kit"), 1)
         except Exception:
             pass
     for f in REVIEW.glob("*__clip_*.posted.json"):
@@ -771,7 +771,7 @@ def review_recut(stem, layout, nocaps=False):
         from common import job_dir, ytdlp_base, run
         cj = REVIEW / (stem + ".json"); d = json.loads(cj.read_text(encoding="utf-8"))
         url, pick = d["source_url"], int(stem.split("clip_")[1])
-        job = job_dir(url); src = job / "source.mp4"
+        job = job_dir(url); src = job / "source.mp4"; kit_mode = None
         if d.get("origin") == "live":  # a live clip: cut again from the short raw clip that was kept with it (the stream itself is long gone)
             raw = REVIEW / (stem + ".raw")
             if not raw.exists() or not d.get("job") or not d.get("raw_src"):
@@ -779,13 +779,16 @@ def review_recut(stem, layout, nocaps=False):
             job = pathlib.Path(d["job"]); rs = pathlib.Path(d["raw_src"])
             if not rs.exists():
                 rs.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(raw, rs)
+        elif d.get("kit") and (REVIEW / (stem + ".raw")).exists() and (REVIEW / (stem + ".kit")).exists():  # a video clip: cut again from the short raw piece kept with it (no new download)
+            import rawkeep
+            job, kit_s, kit_e, _, pick = rawkeep.restore_job(REVIEW / (stem + ".kit"), REVIEW / (stem + ".raw"), R / "jobs" / ("recut-" + stem)); kit_mode = (kit_s, kit_e)
         elif not src.exists():
             say("posting", "Re-cutting this clip: downloading the source again...")
             run(ytdlp_base(url) + ["-f", "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080]/b", "--merge-output-format", "mp4", "-o", str(src), url])
         say("posting", f"Re-cutting this clip ({layout})...")
         caps = ["--captions", "none"] if (nocaps or d.get("no_caps") or d.get("recut")) else []
         r = subprocess.run([str(R / ".venv" / "Scripts" / "python.exe"), "scripts/cut.py", str(job), "--pick", str(pick), "--layout", layout, "--hook", d.get("hook", ""),
-                            "--start", str(d["start"]), "--end", str(d["end"]), *caps], cwd=R, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800,
+                            "--start", str(kit_mode[0] if kit_mode else d["start"]), "--end", str(kit_mode[1] if kit_mode else d["end"]), *caps], cwd=R, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800,
                            env={**os.environ, "PYTHONUTF8": "1", "CLIP_DESK_HOME": str(R)}, creationflags=0x08000000)
         new = job / "edits" / f"clip_{pick}.mp4"
         if r.returncode != 0 or not new.exists():
@@ -811,6 +814,8 @@ def review_recut(stem, layout, nocaps=False):
         REVIEW_STATUS.pop(stem, None)
     except Exception as e:
         say("error", "Re-cut failed, the clip is unchanged: " + str(e)[:220])
+    finally:
+        shutil.rmtree(R / "jobs" / ("recut-" + stem), ignore_errors=True)  # the temporary folder made from the kept raw piece
 
 
 def review_rejoke(stem):
