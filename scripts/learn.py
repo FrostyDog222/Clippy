@@ -35,10 +35,29 @@ def flat(d, pre=""):
 
 OFF_MOMENT = ("nudity", "crop", "repeat", "audio", "captions", "cutoff", "title", "language")  # reasons about the making, not about the moment
 
+# Words in the user's own reasons that tell Clippy what they mean (any language of the user: English words here, plus the clip's own reason text is kept as typed).
+REASON_WORDS = {"crop": ("crop", "framing", "zoom", "cut off", "cropped", "face", "webcam", "layout", "black bars"), "audio": ("sound", "audio", "volume", "loud", "music", "noise", "mic", "quiet"),
+                "captions": ("caption", "subtitle", "text on screen", "font"), "title": ("title", "headline", "joke", "description", "hashtag"), "cutoff": ("too early", "too late", "ends", "starts", "cut short", "abrupt"),
+                "language": ("language", "foreign", "translated", "english"), "nudity": ("nude", "naked", "nsfw", "sexual"), "repeat": ("repeat", "again", "already posted", "same clip", "duplicate"),
+                "boring": ("boring", "dull", "bland", "meh"), "slow": ("slow", "long", "drag", "waiting", "nothing happening"), "notfunny": ("not funny", "unfunny", "cringe"),
+                "nocontext": ("context", "confusing", "no idea", "doesn't make sense", "unclear"), "offtopic": ("off topic", "not gta", "unrelated", "other game", "irrelevant")}
+
+
+def canon(r):
+    """A reason the user typed -> the known reason it means (or the text itself when nothing matches)."""
+    t = str(r).strip().lower()
+    if t in REASON_WORDS or not t:
+        return t
+    for k, ws in REASON_WORDS.items():
+        if any(w in t for w in ws):
+            return k
+    return t
+
 
 def off_moment(r):
-    rs = r.get("reasons") or ([r["reason"]] if r.get("reason") else [])
+    rs = [canon(x) for x in (r.get("reasons") or ([r["reason"]] if r.get("reason") else []))]
     return bool(rs) and all(x in OFF_MOMENT for x in rs)
+
 
 
 def channel_of(r):

@@ -860,6 +860,7 @@ def test_dislike_reasons_can_be_several_and_custom():
     import learn
     assert learn.off_moment({"reasons": ["crop", "audio"]}) and learn.off_moment({"reason": "nudity"})
     assert not learn.off_moment({"reasons": ["crop", "boring"]}) and not learn.off_moment({"reasons": ["my own words"]}) and not learn.off_moment({})
+    assert learn.off_moment({"reasons": ["the sound was terrible", "wrong crop on the face"]}) and learn.canon("This is so boring") == "boring" and not learn.off_moment({"reasons": ["super dull moment"]})
 
 
 def test_english_captions_are_byte_identical_and_other_scripts_get_fonts():

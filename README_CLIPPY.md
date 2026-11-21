@@ -13,7 +13,12 @@ Clippy learns **your** taste from the clips you rate. Press 👍 (stood out, goo
 `ratings.jsonl`, `learned_weights.json`, `views.jsonl` and `seen_moments.jsonl` are the memory of your Clippy. They stay on your PC, are never uploaded and are not part of any update or release. Deleting a clip does NOT delete what Clippy learned from it. They are lost only if you delete the Clippy folder or press "Start fresh" in the History learning card, so use Settings, Backup, Download backup now and then (it holds your settings and these files, never your sign-ins or keys).
 
 ## Languages
+> **Heads up:** English works just fine. Other languages are not fully tested: they might fail or behave oddly (wrong or missing captions, a missed or misjudged moment, a streamer's mixed languages confusing it). Look at those clips before you post them.
+
 English is what Clippy knows best. Other languages work too: pick them in Settings. Clippy reads the language from the speech and only trusts it at 80% or more. A moment counts as "in your language" when at least 25% of its words are, so a streamer who switches between their language and English still works, and the captions show every word. When Clippy is not sure of the language (and the words do not look English) the clip is made without captions, marked "language unsure" and never posted by itself. Every clip has a "Rebuild without captions" button. Reaction words (shock, laughs, swearing) are built in for 15 languages. Slurs in other languages are not filtered: that is your responsibility.
+
+## Videos or live streams?
+We recommend **videos and VODs**: Clippy can read the whole video and go straight to the interesting parts. **Live streams work just fine too**, they just take longer: Clippy has to wait for something to happen, it cannot jump to the good parts, and sometimes nothing worth clipping happens at all. It depends on the stream, but it works. Defaults: minimum score 7 for videos and 6 for streams; you can lower them (2-3 allows nearly everything) if you want more clips and accept weaker ones. Your review ratings and your own "why was it bad" reasons (it understands words like crop, sound, boring, slow) teach it over time.
 
 ## Start
 1. Double-click `setup.bat` (installs into this folder only; asks before every download).
