@@ -1,0 +1,38 @@
+# nothing personal, nothing downloaded, nothing generated ever goes in this repo
+.venv/
+__pycache__/
+*.pyc
+jobs/
+review/
+release/
+logs/
+chrome_profile/
+api_tokens/
+*.dpapi
+# settings and state of one user's installation
+autopost_config.json
+autopost_state.json
+autopost_log.md
+progress.json
+signin_status.json
+headless_check.json
+search_cache.json
+yt_block.json
+run_history.json
+suspended.json
+autorun.pid
+post.lock
+PAUSED.txt
+*.log
+.release_scrub.txt
+.env
+# media
+*.mp4
+*.mkv
+*.webm
+*.mov
+*.wav
+*.mp3
+*.m4a
+*.ts
+*.npy
