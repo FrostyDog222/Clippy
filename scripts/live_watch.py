@@ -26,6 +26,8 @@ SESSION_MIN = 180        # one recording session per stream, then it is picked u
 DISCOVER_EVERY = 300     # seconds between searches for new live streams
 SEG_KEEP = 15 * 60       # delete recorded 60 s segments older than this (a clip only needs the last minute)
 QUEUE_KEEP = 15 * 60     # a chat spike not used within 15 min is dropped
+QUIET_MIN = 40           # a stream with no chat spike for this long is a candidate to be swapped for a better one (a streamer who went idle, a stream that is over)
+SWAP_VIEWERS = 2.0       # a new stream with this many times the viewers also replaces a stream that has been quiet for 15 minutes
 BIG_CHAT_REL = 1.0       # after 4 spikes of a stream: only a spike at or above that stream's own median spike is worth cutting (chat of big streamers is busy all the time); 1.3 is stricter
 norm = autorun.norm
 
@@ -86,6 +88,7 @@ class Watch:
         self.p = subprocess.Popen([PY, "scripts/live.py", self.url, "--minutes", str(SESSION_MIN), "--before", "25", "--viewers", str(int(self.s.get("viewers") or 0))], cwd=R, stdout=self.logf, stderr=subprocess.STDOUT,
                                   env={**os.environ, "CLIP_DESK_HOME": str(R), "PYTHONIOENCODING": "utf-8"}, creationflags=NOWIN)
         self.seen, self.spikes = {f.name for f in self.dir.glob("spike_*.mp4")}, 0  # spike clips left from an earlier session are stale: ignore them
+        self.last_spike = self.t0  # when this stream last had a chat spike (for swapping quiet streams)
         self.rates = []  # chat rates of this stream's spikes so far: a spike is judged against its own stream's usual level, not against a bigger stream
 
     def alive(self):
@@ -116,7 +119,7 @@ class Watch:
         out = []
         for f in sorted(self.dir.glob("spike_*.mp4")):
             if f.name not in self.seen and f.stat().st_size > 0 and time.time() - f.stat().st_mtime > 3:
-                self.seen.add(f.name); self.spikes += 1
+                self.seen.add(f.name); self.spikes += 1; self.last_spike = time.time()
                 r = rates.get(f.name, 0); self.rates.append(r)
                 base = sorted(self.rates)[len(self.rates) // 2] or 1  # the median spike of this stream so far (the first one counts as 1.0)
                 rel = r / base
@@ -125,6 +128,33 @@ class Watch:
                     continue
                 out.append({"path": f, "rate": r, "rel": rel, "born": time.time(), "s": self.s})
         return out
+
+
+def stream_ended(url):
+    """True when a YouTube broadcast is over: yt-dlp reports it as no longer live (post_live = it turned into a recording, was_live, not_live). A failed or unclear lookup says False."""
+    try:
+        from yt_dlp import YoutubeDL
+        with YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True, "socket_timeout": 20}) as y:
+            i = y.extract_info(url, download=False) or {}
+        return i.get("live_status") in ("post_live", "was_live", "not_live") and not i.get("is_live")
+    except Exception:
+        return False
+
+
+def pick_victim(watches, cand, now=None):
+    """Which watched stream should make room for `cand` (a live stream that is not watched yet)? None = nobody (keep what we have).
+    - a streamer from your list who is live but not watched replaces the weakest stream that is NOT on your list (and has been quiet for 15 minutes);
+    - any other stream replaces a stream that has had no chat spike for QUIET_MIN minutes, or one that has been quiet for 15 minutes when the newcomer has
+      SWAP_VIEWERS times its viewers (a much more popular streamer just went live).
+    Streams on your list are never swapped out. At most one swap per search."""
+    now = now or time.time()
+    quiet = lambda w, m: now - w.last_spike >= m * 60 and now - w.t0 >= m * 60
+    others = [w for w in watches if not w.s.get("creator")]
+    if cand.get("creator"):
+        pool = [w for w in others if quiet(w, 15)]
+    else:
+        pool = [w for w in others if quiet(w, QUIET_MIN) or (quiet(w, 15) and (cand.get("viewers") or 0) >= SWAP_VIEWERS * max(1, w.s.get("viewers") or 1))]
+    return min(pool, key=lambda w: (w.spikes, w.last_spike)) if pool else None
 
 
 def process(item, cfg, dry):
@@ -208,16 +238,24 @@ def main():
                 cooldown[w.url] = time.time() + (30 if time.time() - w.t0 < 1800 else 600); next_find = 0.0
             while len(watches) > maxn:  # user lowered the number
                 w = watches.pop(); w.stop()
-            if len(watches) < maxn and time.time() >= next_find:
+            if time.time() >= next_find:  # every few minutes, also with all slots taken: a better stream may be live now
                 next_find = time.time() + DISCOVER_EVERY
+                for w in [w for w in watches if w.s["platform"] == "YouTube" and stream_ended(w.url)]:  # a YouTube broadcast that turned into a recording is not "live" any more
+                    log(f"stream is over: {w.s['channel']} (YouTube says the broadcast ended)")
+                    watches.remove(w); w.stop(); cooldown[w.url] = time.time() + 6 * 3600
                 have = {w.url for w in watches}
+                swapped = False
                 for s in discover(cfg):
-                    if len(watches) >= maxn:
-                        break
                     if s["url"] in have or cooldown.get(s["url"], 0) > time.time():
                         continue
                     if any(norm(w.s["channel"]) == norm(s["channel"]) for w in watches):  # the same streamer simulcasting on two platforms is watched once
                         continue
+                    if len(watches) >= maxn:
+                        v = None if swapped else pick_victim(watches, s)
+                        if not v:
+                            continue
+                        swapped = True; watches.remove(v); v.stop(); have.discard(v.url); cooldown[v.url] = time.time() + 1800
+                        log(f"swapping {v.s['channel']} (no chat spike for {int((time.time() - v.last_spike) // 60)} min) for {s['channel']} ({s.get('viewers')} viewers{', on your list' if s.get('creator') else ''})")
                     log(f"watching {s['platform']} {s['channel']} ({s.get('viewers')} viewers): {s['title'][:60]}")
                     watches.append(Watch(s)); have.add(s["url"])
             for w in watches:

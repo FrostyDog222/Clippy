@@ -741,6 +741,47 @@ def test_current_run_log_shows_the_live_log_while_live_is_on():
         d.R, d.CFG, d.LOG, d.LIVE_STATUS = keep
 
 
+def test_live_watcher_swaps_quiet_streams_for_better_ones():
+    import sys, time as tm
+    from types import SimpleNamespace as NS
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent)); sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import live_watch as lw
+    now = tm.time(); mk = lambda ch, viewers, spikes, idle_min, creator=None, age=300: NS(s={"channel": ch, "viewers": viewers, "creator": creator}, spikes=spikes, last_spike=now - idle_min * 60, t0=now - age * 60)
+    busy, quiet, quieter, mine = mk("busy", 20000, 5, 3), mk("quiet", 15000, 1, 50), mk("quieter", 14000, 0, 90), mk("mine", 9000, 0, 200, creator="Mine")
+    ws = [busy, quiet, quieter, mine]
+    assert lw.pick_victim(ws, {"viewers": 10000}, now) is quieter                       # idle for 40+ minutes: the one with the fewest spikes goes first
+    assert lw.pick_victim([busy, mine], {"viewers": 10000}, now) is None                # nobody idle, newcomer not much bigger: keep everything
+    assert lw.pick_victim([mk("x", 5000, 1, 20), mine], {"viewers": 11000}, now).s["channel"] == "x"   # 2x the viewers and quiet for 15+ minutes
+    assert lw.pick_victim([busy, quiet], {"viewers": 5000, "creator": "Mine"}, now) is quiet           # a streamer from your list takes the place of a quiet stream
+    assert lw.pick_victim([mine], {"viewers": 99999, "creator": "Other"}, now) is None                # a stream on your list is never swapped out
+
+
+def test_ended_youtube_streams_are_detected():
+    import sys, types
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent)); sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import live_watch as lw
+    def fake(info):
+        class Y:
+            def __init__(self, o): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def extract_info(self, url, download=False):
+                if isinstance(info, Exception):
+                    raise info
+                return info
+        return types.SimpleNamespace(YoutubeDL=Y)
+    keep = sys.modules.get("yt_dlp")
+    try:
+        sys.modules["yt_dlp"] = fake({"is_live": False, "live_status": "post_live"}); assert lw.stream_ended("u")
+        sys.modules["yt_dlp"] = fake({"is_live": True, "live_status": "is_live"}); assert not lw.stream_ended("u")
+        sys.modules["yt_dlp"] = fake(RuntimeError("network")); assert not lw.stream_ended("u")      # a failed lookup never ends a stream
+    finally:
+        if keep is not None:
+            sys.modules["yt_dlp"] = keep
+        else:
+            sys.modules.pop("yt_dlp", None)
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""
