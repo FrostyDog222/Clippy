@@ -294,6 +294,11 @@ def test_restart_is_wanted_only_when_program_files_changed():
         d.R, d.START_SIG = keep
 
 
+def test_description_is_a_real_line_not_one_word():
+    p = ai_title.build_prompt("hello there", "CaseOh", "src title")
+    assert "AT LEAST 4 words" in p and not any("one-word" in v for v in ai_title.VOICES)
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""
