@@ -64,6 +64,23 @@ def _fonts(text):
     return ' '.join(out)
 
 
+def _tidy(ws):
+    """The speech model sometimes stretches a word over the silence next to it (a word 'lasting' 6 seconds). A word is as long as it takes to say: the stretch is trimmed away.
+    A stretched word that comes right after a pause was said at its END (the pause is before it); any other was said at its start."""
+    out = []
+    for i, w in enumerate(ws):
+        s, e = float(w["s"]), float(w["e"])
+        cap = min(1.3, 0.4 + 0.1 * len(w["w"]))
+        if e - s > cap:
+            first = i == 0 or s - float(ws[i - 1]["e"]) > 0.3
+            if first and (i + 1 < len(ws) and float(ws[i + 1]["s"]) - e < 0.3):
+                s = e - cap
+            else:
+                e = s + cap
+        out.append(dict(w, s=round(s, 2), e=round(e, 2)))
+    return out
+
+
 def _rtl(g):
     try:
         import langkit
@@ -99,7 +116,7 @@ Style: Bubble,Arial,58,&H00000000,&H00000000,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     ev = []
-    ws = [dict(w, w=clean(w["w"], profanity)) for w in words if s0 <= w["s"] < e0 and w["w"]]
+    ws = _tidy([dict(w, w=clean(w["w"], profanity)) for w in words if s0 <= w["s"] < e0 and w["w"]])
     # groups of up to 3 words, break on punctuation or pauses
     groups, cur = [], []
     for w in ws:

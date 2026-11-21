@@ -916,6 +916,17 @@ def test_video_clip_raw_piece_is_shifted_and_restored():
     assert (j / "source.mp4").exists() and 15 < float(subprocess.run([tool("ffprobe"), "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(j / "source.mp4")], capture_output=True, text=True).stdout) < 25
 
 
+def test_stretched_words_are_trimmed_to_when_they_were_said():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import cut
+    ws = [{"w": "right", "s": 33.35, "e": 39.45}, {"w": "this", "s": 39.45, "e": 39.63}, {"w": "lit", "s": 40.03, "e": 40.67}, {"w": "24", "s": 40.67, "e": 46.05}, {"w": "strip", "s": 46.05, "e": 47.13}]
+    t = cut._tidy(ws)
+    assert t[0]["s"] > 38.0 and t[0]["e"] == 39.45          # a stretched first word was said at its end, right before the next word
+    assert t[3]["s"] == 40.67 and t[3]["e"] < 42.0          # a stretched word before a silence was said at its start
+    assert t[1] == ws[1] | {"s": 39.45, "e": 39.63}         # normal words are untouched
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

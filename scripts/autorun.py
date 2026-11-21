@@ -343,6 +343,7 @@ def queue_for_review(clip):
     stem = f"{int(time.time())}__{clip.stem}"  # must keep "clip_N": post_clip.py derives the meta file name from it
     shutil.copy2(clip, REVIEW / f"{stem}.mp4")
     d = json.loads(clip.with_suffix(".json").read_text(encoding="utf-8")); d["file"] = str(REVIEW / f"{stem}.mp4")
+    (REVIEW / f"{stem}.json").write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")  # first: the dashboard's tidy-up must never see raw files without their clip's info file
     if d.get("origin") == "live":  # the stream moves on: keep the short raw clip (15-40 MB) next to the finished one so Crop / Rebuild without captions still work; deleted with the clip
         try:
             job = clip.parent.parent
