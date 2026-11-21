@@ -345,6 +345,11 @@ def queue_for_review(clip):
     d = json.loads(clip.with_suffix(".json").read_text(encoding="utf-8")); d["file"] = str(REVIEW / f"{stem}.mp4")
     (REVIEW / f"{stem}.json").write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
     sh([PY, "scripts/make_meta.py", str(REVIEW / f"{stem}.json")])
+    try:  # remember this moment (and its streamer) so the same one is never made twice
+        import dupes
+        dupes.record(d.get("source_id"), d.get("source_channel"), d.get("start"), d.get("end"), textutil.clip_text(clip.with_suffix(".json")))
+    except Exception:
+        pass
     return stem
 
 
@@ -375,6 +380,14 @@ def snap_start(src, start):
 def _stage1(v, score, job, n, c, creator):
     """Stage 1 of judging one moment, text only (score bar, music, AI bit finder): cheap. Returns None (not good enough) or the state stage 2 continues from."""
     log(f"  moment {n}: score {score} ({', '.join(c['why'])})")
+    if not v.get("custom"):  # a link you pasted yourself is never skipped
+        try:
+            import dupes
+            why_dup = dupes.is_duplicate(v.get("id"), v.get("channel"), c["start"], c["end"], c.get("text"))
+            if why_dup:
+                log(f"  skipping: {why_dup}"); return None
+        except Exception:
+            pass
     strict = CFG.get("quality", "strict") == "strict"  # quality over quantity is ON unless the user switches it off
     # strict no longer means "reject on any single weak signal" (that left runs empty): soft problems are penalties on one rank, only clear junk is rejected
     pen = []

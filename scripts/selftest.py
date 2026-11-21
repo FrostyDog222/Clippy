@@ -510,6 +510,116 @@ def test_private_days_count_from_the_day_they_are_set():
     assert again["start_date"] == new["start_date"]                                 # saving other settings does not restart the count
 
 
+def test_health_checks():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import health
+    have = {"chrome": True, "ffmpeg": True, "ytdlp": True, "ai_key": True}
+    good = health.checks({"title_writer": "api"}, {"youtube": True, "tiktok": True}, {}, 50.0, 2, have)
+    assert health.summary(good)["ok"] and all(x["level"] in ("ok", "info") for x in good)
+    bad = health.checks({"title_writer": "api"}, {"youtube": False, "tiktok": True}, {"available": True}, 2.0, 9, {**have, "chrome": False, "ai_key": False}, "20:00")
+    ids = {x["id"]: x for x in bad}
+    assert ids["signin_youtube"]["level"] == "bad" and ids["signin_youtube"]["fix"]["action"] == "signin"
+    assert ids["chrome"]["level"] == "bad" and ids["disk"]["level"] == "bad" and ids["ai"]["level"] == "warn" and "update" in ids and "waiting" in ids and "ytlimit" in ids
+    assert health.summary(bad)["bad"] == 3 and not health.summary(bad)["ok"]
+    only_tt = health.checks({"post_youtube": False}, {"youtube": False, "tiktok": True}, {}, 50.0, 0, have)
+    assert not any(x["id"] == "signin_youtube" for x in only_tt)                     # a platform you switched off is not checked
+
+
+def test_youtube_limit_is_remembered_until_the_reset():
+    import sys, tempfile, time as tm, datetime as dtm
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import ytlimit
+    keep = ytlimit.F; ytlimit.F = Path(tempfile.mkdtemp()) / "yt_limit.json"
+    try:
+        assert ytlimit.until() is None and ytlimit.text() is None
+        now = tm.time(); u = ytlimit.set_hit(now)
+        assert now < u <= now + 25 * 3600 and ytlimit.until(now) == u and ytlimit.text(False, now)   # reset is within a day
+        assert ytlimit.until(u + 5) is None                                                            # after the reset YouTube is free again
+        assert ytlimit.reset_time(now) > now
+        ytlimit.clear(); assert ytlimit.until() is None
+    finally:
+        ytlimit.F = keep
+
+
+def test_duplicate_guard_only_for_the_same_streamer():
+    import sys, tempfile
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import dupes
+    keep = dupes.F; dupes.F = Path(tempfile.mkdtemp()) / "seen.jsonl"
+    said = "oh my god did you see that he just drove the car straight off the bridge into the water nobody expected that"
+    try:
+        dupes.record("vid1", "WestJett", 100, 130, said)
+        assert dupes.is_duplicate("vid1", "westjett", 110, 140, "something else entirely")                 # same streamer, same video, overlapping time
+        assert dupes.is_duplicate("vid2", "WestJett", 5, 35, said)                                          # same streamer, another upload, same words
+        assert not dupes.is_duplicate("vid1", "OtherStreamer", 100, 130, said)                              # another streamer: NEVER a duplicate, even identical words
+        assert not dupes.is_duplicate("vid1", "WestJett", 300, 330, "a completely different moment with different words in it here")   # same video, other part
+        assert not dupes.is_duplicate("vid3", "WestJett", 0, 30, "short")                                    # too few words to compare
+        assert not dupes.is_duplicate("vid1", "", 100, 130, said)                                            # unknown streamer: not guessed
+    finally:
+        dupes.F = keep
+
+
+def test_backup_and_restore_round_trip():
+    import sys, tempfile
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    keep = (d.R, d.CFG, d.learn_refit)
+    tmp = Path(tempfile.mkdtemp()); d.R = tmp; d.CFG = tmp / "autopost_config.json"; d.learn_refit = lambda: None
+    try:
+        import json
+        base = {**json.loads(keep[1].read_text(encoding="utf-8-sig")), "autopilot": True, "auto_post": True, "min_score": 6.5}
+        d.save_cfg(base); (tmp / "ratings.jsonl").write_text('{"id":"x","rating":1}\n', encoding="utf-8")
+        b = d.backup_bundle()
+        assert b["clippy_backup"] == 1 and "ratings" in b and "x" in b["ratings"] and not any("key" in k.lower() and isinstance(v, str) and len(v) > 40 for k, v in b["config"].items())
+        d.save_cfg({**base, "min_score": 8.0, "autopilot": True}); (tmp / "ratings.jsonl").unlink()
+        d.restore_bundle(b)
+        got = json.loads(d.CFG.read_text(encoding="utf-8"))
+        assert got["min_score"] == 6.5 and got["autopilot"] is False and got["auto_post"] is False              # settings back, but nothing starts by itself
+        assert "x" in (tmp / "ratings.jsonl").read_text(encoding="utf-8")                                        # learning back
+        try:
+            d.restore_bundle({"nope": 1}); raise AssertionError("should refuse")
+        except ValueError:
+            pass
+    finally:
+        d.R, d.CFG, d.learn_refit = keep
+
+
+def test_update_can_go_back():
+    import sys, json, tempfile
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import update_clippy as u
+    keep = (u.R, u.STATE, u.VER)
+    tmp = Path(tempfile.mkdtemp()); u.R = tmp; u.STATE = tmp / "update_state.json"; u.VER = tmp / "version.json"
+    try:
+        (tmp / "scripts").mkdir(); (tmp / "dashboard.py").write_text("NEW"); (tmp / "scripts" / "x.py").write_text("NEW2"); u.VER.write_text(json.dumps({"sha": "b" * 40}))
+        bak = tmp / "update_backup" / "20260101-000000"; (bak / "scripts").mkdir(parents=True)
+        (bak / "dashboard.py").write_text("OLD"); (bak / "scripts" / "x.py").write_text("OLD2"); (bak / "evil.txt").write_text("no"); (bak / "_prev.json").write_text(json.dumps({"sha": "a" * 40, "new": "b" * 40}))
+        assert len(u.backups()) == 1
+        u.rollback()
+        assert (tmp / "dashboard.py").read_text() == "OLD" and (tmp / "scripts" / "x.py").read_text() == "OLD2" and not (tmp / "evil.txt").exists()   # only program files come back
+        assert json.loads(u.VER.read_text())["sha"] == "a" * 40
+        st = json.loads(u.STATE.read_text()); assert st["skip"] == "b" * 40 and st["restart"] and not u.backups()                                       # not offered again; backup used up
+        u.rollback(); assert "no earlier version" in json.loads(u.STATE.read_text())["error"]
+    finally:
+        u.R, u.STATE, u.VER = keep
+
+
+def test_selected_clips_can_be_scheduled():
+    import sys, json, tempfile, datetime as dtm
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    keep = d.REVIEW; d.REVIEW = Path(tempfile.mkdtemp())
+    try:
+        for i, rt in enumerate([0, 0, 1]):
+            st = f"17960000{i:02d}__clip_1"; (d.REVIEW / f"{st}.mp4").write_bytes(b"x"); (d.REVIEW / f"{st}.json").write_text(json.dumps({"rank": 5 + i, "rating": rt}))
+        n = d.review_autoschedule("private", now=dtm.datetime(2026, 11, 22, 10, 0), ids={"1796000000__clip_1"})
+        sch = {f.stem[8:10]: json.loads(f.read_text()).get("scheduled") for f in d.REVIEW.glob("*.json")}
+        assert n == 1 and sch["00"] and not sch["01"] and not sch["02"], sch                # only the selected clip, liked or not
+    finally:
+        d.REVIEW = keep
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

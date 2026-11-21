@@ -450,7 +450,9 @@ def perf():
         yt, tt = s.get("yt"), s.get("tt")
         rows.append({"ts": p.get("ts", ""), "title": p.get("title") or p.get("caption") or "", "yt_link": p.get("youtube_link"), "tt_status": p.get("tiktok_status"), "who": p.get("channel") or p.get("creator") or "?", "layout": p.get("layout") or "?", "origin": p.get("origin") or "video",
                      "seconds": p.get("seconds"), "mode": p.get("mode"), "yt": yt, "tt": tt, "views": ((yt or {}).get("views") or 0) + ((tt or {}).get("views") or 0),
-                     "has": bool(yt or tt), "hour": int(p["ts"][11:13]) if p.get("ts") else None, "seen": s.get("ts")})
+                     "has": bool(yt or tt), "hour": int(p["ts"][11:13]) if p.get("ts") else None, "seen": s.get("ts"),
+                     "len": ("up to 20 s" if float(p.get("seconds") or 0) <= 20 else "20 to 35 s" if float(p.get("seconds") or 0) <= 35 else "over 35 s") if p.get("seconds") else None,
+                     "score": p.get("score")})
     have = [r for r in rows if r["has"]]
     ins = []
     if len(have) >= 5:
@@ -464,6 +466,15 @@ def perf():
                 k, v = max(g.items(), key=lambda kv: kv[1]); ins.append(f"Best {label}: {fmt(k)} (about {int(v)} views per post)")
         best("who", "streamer"); best("layout", "layout"); best("origin", "source", lambda v: "live streams" if v == "live" else "videos")
         best("hour", "posting hour", lambda h: f"{int(h):02d}:00")
+        best("len", "clip length")
+        try:  # does Clippy's own energy score predict views? (helps you decide the minimum score)
+            hi = [r["views"] for r in have if r.get("score") is not None and float(r["score"]) >= 6]
+            lo = [r["views"] for r in have if r.get("score") is not None and float(r["score"]) < 6]
+            if len(hi) >= 2 and len(lo) >= 2:
+                a, b = sum(hi) / len(hi), sum(lo) / len(lo)
+                ins.append(f"Clips with an energy score of 6+ got about {int(a)} views, the others about {int(b)}" + (" (the score is a good guide for you)" if a > b * 1.2 else " (the score does not predict views for you yet)" if a < b * 0.8 else ""))
+        except Exception:
+            pass
     return {"rows": list(reversed(rows))[:300], "insights": ins, "need": max(0, 5 - len(have)), "updated": max((r["seen"] or "" for r in rows), default="")}
 
 
@@ -543,6 +554,7 @@ def clean(new, old):
     out["display_name"] = re.sub(r"\s+", " ", str(new.get("display_name", ""))).strip()[:40]  # the name in the welcome line
     out["auto_clips_per_run"] = max(1, min(10, int(new.get("auto_clips_per_run", 1) or 1)))  # clips per automatic (Autopilot) run; the manual "clips this run" is saved right away by /api/clips
     out["blocked_streamers"] = ", ".join(x.strip() for x in re.split(r"[,;\n]", str(new.get("blocked_streamers", ""))) if x.strip())[:300]  # streamers that are never clipped
+    out["notify"] = bool(new.get("notify", False))  # optional Windows pop-ups (run finished, scheduled post done / failed)
     out["auto_update"] = bool(new.get("auto_update", True))  # install new Clippy versions by itself (settings and clips are never touched)
     # auto_post is not set here: its switches (Ready to post and Settings) save immediately through /api/autopost; OFF (default) = finished clips wait in "Ready to post"
     out["post_youtube"] = bool(new.get("post_youtube", True)); out["post_tiktok"] = bool(new.get("post_tiktok", True))  # where to post
@@ -914,8 +926,8 @@ def plan_slots(now, n, per_day, start, end, gap, taken):
     return out
 
 
-def review_autoschedule(mode, now=None):
-    """Give every waiting clip you liked (👍; not posted, not scheduled), best rank first, a time that respects the daily limit and the posting window from Settings. Returns how many."""
+def review_autoschedule(mode, now=None, ids=None):
+    """Give every waiting clip you liked (👍; not posted, not scheduled), best rank first (or exactly the clips in `ids` when given, liked or not), a time that respects the daily limit and the posting window from Settings. Returns how many."""
     if mode not in ("private", "public"):
         raise ValueError("bad visibility")
     now, c = now or dt.datetime.now(), read_cfg()
@@ -931,7 +943,7 @@ def review_autoschedule(mode, now=None):
             taken.append(dt.datetime.fromtimestamp(pf.stat().st_mtime))
         elif d.get("scheduled"):
             taken.append(dt.datetime.fromisoformat(d["scheduled"]["at"]))
-        elif d.get("rating") == 1:  # only the clips you liked (👍) are spread out; the rest stay for you to look at
+        elif (f.stem in ids) if ids is not None else d.get("rating") == 1:  # only the clips you liked (👍) are spread out (or the ones you selected); the rest stay for you to look at
             todo.append((-(float(d.get("rank") or 0)), f.stem))
     todo.sort()
     slots = plan_slots(now, len(todo), int(c.get("posts_per_day", 6)), c.get("window_start", "09:00"), c.get("window_end", "22:30"), int(c.get("min_gap_minutes", 120)), taken)
@@ -977,7 +989,7 @@ def sched_tick(now=None):
         except Exception:
             continue
     for stem, mode in started:
-        threading.Thread(target=review_post, args=(stem, mode), daemon=True).start()
+        threading.Thread(target=sched_post, args=(stem, mode), daemon=True).start()
     return [x[0] for x in started]
 
 
@@ -994,11 +1006,49 @@ def views_loop():
         time.sleep(3500)
 
 
+NOTIFY_PS = ("$ErrorActionPreference='Stop';"
+             "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null;"
+             "$t=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);"
+             "$n=$t.GetElementsByTagName('text');$n.Item(0).AppendChild($t.CreateTextNode($env:CLIPPY_NT)) | Out-Null;$n.Item(1).AppendChild($t.CreateTextNode($env:CLIPPY_NM)) | Out-Null;"
+             "$id='{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe';"
+             "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($id).Show([Windows.UI.Notifications.ToastNotification]::new($t))")
+_NOTIFIED = {"ts": None}
+
+
+def notify(title, msg):
+    """An optional Windows pop-up (Settings > Notifications, OFF by default). Stays on this PC: a hidden PowerShell shows a normal Windows toast, nothing is sent anywhere."""
+    try:
+        if not read_cfg().get("notify"):
+            return
+        subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", NOTIFY_PS], creationflags=NOWIN,
+                         env={**os.environ, "CLIPPY_NT": str(title)[:60], "CLIPPY_NM": str(msg)[:180]}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def notify_tick():
+    """A run ended (done or failed): one pop-up per run."""
+    p = progress()
+    if not p or p.get("ts") == _NOTIFIED["ts"]:
+        return
+    if p["pct"] >= 100 or p["pct"] < 0:
+        _NOTIFIED["ts"] = p["ts"]
+        notify("Clippy: run finished" if p["pct"] >= 100 else "Clippy: run stopped", p.get("msg", ""))
+
+
+def sched_post(stem, mode):
+    """A scheduled post (nobody is watching): post it, then tell the user how it went."""
+    review_post(stem, mode)
+    st = REVIEW_STATUS.get(stem) or {}
+    notify("Clippy: scheduled post " + ("failed" if st.get("state") == "error" else "done"), st.get("msg", ""))
+
+
 def sched_loop():
     while True:
         time.sleep(30)
         try:
             sched_tick()
+            notify_tick()
         except Exception:
             pass
 
@@ -1037,7 +1087,9 @@ def review_post(stem, mode="private"):
             side.write_text(json.dumps(done), encoding="utf-8")
             ok_now = [k.capitalize() for k in ("youtube", "tiktok") if res.get(k)]  # what DID go out this time (the other platform may have failed)
             st.update(state="error" if res.get("error") else "done",
-                      msg=(("Posted to " + " and ".join(ok_now) + ". " if ok_now else "") + friendly(res.get("error"))) if res.get("error") else "Posted.", detail=(res.get("error") or "")[:300])
+                      msg=(("Posted to " + " and ".join(ok_now) + ". " if ok_now else "") + friendly(res.get("error"))) if res.get("error") else ("Posted to " + " and ".join(ok_now) + ". " + res["note"] + ". Press Post again after that for YouTube." if res.get("note") and ok_now else "Posted."), detail=(res.get("error") or "")[:300])
+            if "YOUTUBE_DAILY_LIMIT" in str(res.get("error")):
+                _HEALTH["t"] = 0.0  # show the limit in the health card at once
         finally:
             lock.unlink(missing_ok=True)
     except Exception as e:
@@ -1079,6 +1131,11 @@ class H(http.server.BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
+        if self.path == "/api/backup" and self.headers.get("Host", "").split(":")[0] in ("127.0.0.1", "localhost"):
+            b = json.dumps(backup_bundle(), ensure_ascii=False, indent=1).encode("utf-8")
+            self.send_response(200); self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="clippy-backup-{dt.date.today().isoformat()}.json"')
+            self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b); return
         m = re.match(r"^/review/(\d+__clip_[A-Za-z0-9_-]+)\.(mp4|orig)$", self.path.split("?")[0])
         if m and self.headers.get("Host", "").split(":")[0] in ("127.0.0.1", "localhost"):
             return self.serve_review(m.group(1), m.group(2) == "orig")
@@ -1090,7 +1147,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.send(200, json.dumps({"config": c, "paused": PAUSE.exists(), "checks": checks(),
                                               "today": [p for p in posts if p.get("date") == today and not p.get("deleted")], "log": log,
                                               "progress": progress(), "signin": signin_state(), "jobs_mb": cleanup.jobs_mb(), "all_languages": textutil.LANGS, "perf": perf(), "ai_keys": {p["id"]: secretstore.exists(f"key_{p['id']}") for p in c.get("ai_profiles", [])}, "blocked": blocked_msg(c), "live": live_status(),
-                                              "review": review_items(), "run_stale": run_stale(), "autostart": autostart_state(), "run_timing": run_timing(), "run_suspended": run_suspended(),
+                                              "review": review_items(), "run_stale": run_stale(), "autostart": autostart_state(), "health": health_info(), "run_timing": run_timing(), "run_suspended": run_suspended(),
                                               "update": update_info(), "learn": learn_info(), "boot": BOOT, "restart_needed": restart_wanted(), "html": int((R / "dashboard.html").stat().st_mtime),
                                               "runlog": (R / "autorun.log").read_text(encoding="utf-8", errors="replace")[-8000:] if (R / "autorun.log").exists() else "",
                                               "why": "Next run is due now" if ok else "Waiting: " + why,
@@ -1112,8 +1169,8 @@ class H(http.server.BaseHTTPRequestHandler):
                     pause_run()
                 except RuntimeError as e:
                     return self.send(409, str(e), "text/plain")
-        elif self.path in ("/api/update/check", "/api/update/apply"):
-            if self.path.endswith("apply") and run_alive():
+        elif self.path in ("/api/update/check", "/api/update/apply", "/api/update/rollback"):
+            if not self.path.endswith("check") and run_alive():
                 return self.send(409, "A run or post is in progress: update when it has finished", "text/plain")
             update_run(self.path.rsplit("/", 1)[1], wait=True)
         elif self.path == "/api/clearlog":
@@ -1206,6 +1263,13 @@ class H(http.server.BaseHTTPRequestHandler):
             self.send(200, "{}")
             threading.Thread(target=restart_self, daemon=True).start()
             return
+        elif self.path == "/api/restore":
+            if self.headers.get("Host", "").split(":")[0] not in ("127.0.0.1", "localhost") or n > 25_000_000:
+                return self.send(400, "refused", "text/plain")
+            try:
+                restore_bundle(json.loads(self.rfile.read(n)))
+            except (ValueError, KeyError, TypeError, AssertionError) as e:
+                return self.send(400, str(e) or "This backup could not be restored.", "text/plain")
         elif self.path == "/api/autostart":  # start Clippy with Windows (only while Autopilot is on)
             try:
                 on = bool(json.loads(self.rfile.read(n)).get("on"))
@@ -1249,8 +1313,9 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.send(400, str(e), "text/plain")
         elif self.path == "/api/review/autoschedule":
             try:
-                k = review_autoschedule(json.loads(self.rfile.read(n)).get("mode", "private"))
-            except (ValueError, KeyError, TypeError) as e:
+                body = json.loads(self.rfile.read(n)); ids = body.get("ids"); assert ids is None or (isinstance(ids, list) and all(STEM.match(str(x)) for x in ids) and len(ids) <= 200)
+                k = review_autoschedule(body.get("mode", "private"), ids=set(ids) if ids is not None else None)
+            except (ValueError, KeyError, TypeError, AssertionError) as e:
                 return self.send(400, str(e) or "bad values", "text/plain")
             return self.send(200, json.dumps({"scheduled": k}))
         elif self.path in ("/api/review/schedule", "/api/review/schedule/cancel", "/api/review/unpost"):
@@ -1343,6 +1408,10 @@ def update_info():
     except Exception:
         st = {}
     st["off"] = (R / ".no_update").exists(); st["auto"] = bool(read_cfg().get("auto_update", True))
+    try:
+        st["can_rollback"] = any(p.is_dir() and not p.name.endswith(".used") and (p / "_prev.json").exists() for p in (R / "update_backup").iterdir())
+    except OSError:
+        st["can_rollback"] = False
     return st
 
 
@@ -1408,6 +1477,86 @@ def startup_blocked(argv, cfg):
     return "--startup" in argv and not cfg.get("autopilot")
 
 
+_HEALTH = {"t": 0.0, "v": None}
+
+
+def health_info():
+    """The health check (scripts/health.py), cached for 20 s: the dashboard asks every few seconds."""
+    if _HEALTH["v"] is None or time.time() - _HEALTH["t"] > 20:
+        try:
+            import health, shutil as _sh
+            c = read_cfg()
+            prof = next((p for p in c.get("ai_profiles", []) if p.get("id") == c.get("ai_active")), None)
+            have = {"chrome": bool(getattr(__import__("upload"), "CHROME", None)), "ffmpeg": bool(_sh.which("ffmpeg")), "ytdlp": bool(importlib.util.find_spec("yt_dlp") or _sh.which("yt-dlp")),
+                    "ai_key": bool(prof and secretstore.exists("key_" + str(prof.get("id"))))}
+            try:
+                free = _sh.disk_usage(str(R)).free / 1e9
+            except OSError:
+                free = None
+            items = health.checks(c, signin_state(), update_info(), free, len(waiting_clips()), have, yt_limit_text())
+            _HEALTH["v"] = {"items": items, **health.summary(items)}
+        except Exception:
+            _HEALTH["v"] = {"items": [], "bad": 0, "warn": 0, "ok": True}
+        _HEALTH["t"] = time.time()
+    return _HEALTH["v"]
+
+
+def yt_limit_text():
+    try:
+        import ytlimit
+        return ytlimit.text(read_cfg().get("time_format", "12") == "12")
+    except Exception:
+        return None
+
+
+def dupes_backfill():
+    """Once: remember the clips that are already in Ready to post (from before the duplicate guard existed), so the same moments are not made again."""
+    try:
+        import dupes
+        if dupes.F.exists():
+            return
+        dupes.F.write_text("", encoding="utf-8")
+        for f in sorted(REVIEW.glob("*__clip_*.json")):
+            if f.name.endswith(".posted.json"):
+                continue
+            d = json.loads(f.read_text(encoding="utf-8"))
+            if d.get("source_id") and d.get("source_channel") and d.get("start") is not None:
+                dupes.record(d["source_id"], d["source_channel"], d["start"], d["end"], clip_words(d), now=f.stat().st_mtime)
+    except Exception:
+        pass
+
+
+BACKUP_FILES = {"ratings": "ratings.jsonl", "weights": "learned_weights.json", "views": "views.jsonl", "seen": "seen_moments.jsonl"}  # what Clippy learned (local files)
+
+
+def backup_bundle():
+    """Everything worth keeping when you reinstall or move to another PC: your settings and what Clippy learned from your ratings. NEVER the sign-ins, API keys, videos or logs."""
+    c = read_cfg()
+    out = {"clippy_backup": 1, "created": dt.datetime.now().isoformat(timespec="seconds"), "config": c}
+    for k, name in BACKUP_FILES.items():
+        f = R / name
+        out[k] = f.read_text(encoding="utf-8") if f.exists() else ""
+    return out
+
+
+def restore_bundle(b):
+    """Put a backup back. Settings go through the same checks as a normal save; Autopilot and Auto-Post are always left OFF after a restore, so nothing starts by itself on a new PC."""
+    if not isinstance(b, dict) or b.get("clippy_backup") != 1 or not isinstance(b.get("config"), dict):
+        raise ValueError("This is not a Clippy backup file.")
+    cur = read_cfg()
+    new = clean({**cur, **b["config"]}, cur)
+    new["autopilot"] = False; new["auto_post"] = False
+    for k in ("ai_profiles", "ai_active"):
+        new[k] = cur.get(k, new.get(k))  # your own AI setup on THIS PC is kept (keys never travel)
+    save_cfg(new)
+    for k, name in BACKUP_FILES.items():
+        text = b.get(k, "")
+        if isinstance(text, str) and text.strip() and len(text) < 20_000_000:
+            (R / name).write_text(text, encoding="utf-8")
+    learn_refit()
+    return True
+
+
 _LOCK = []  # keeps the single-dashboard lock alive for the whole run
 
 
@@ -1430,6 +1579,10 @@ def single_dashboard():
 
 if __name__ == "__main__":
     os.chdir(R)  # Windows starts it from another folder
+    try:
+        _NOTIFIED["ts"] = (progress() or {}).get("ts")  # an old finished run must not pop up again after a restart
+    except Exception:
+        pass
     if startup_blocked(sys.argv, read_cfg()):
         sys.exit(0)
     single_dashboard()
@@ -1443,6 +1596,7 @@ if __name__ == "__main__":
         threading.Thread(target=autopilot_loop, daemon=True).start()
         threading.Thread(target=sched_loop, daemon=True).start()
         threading.Thread(target=views_loop, daemon=True).start()
+        threading.Thread(target=dupes_backfill, daemon=True).start()
         threading.Thread(target=live_loop, daemon=True).start()
         threading.Thread(target=stats_loop, daemon=True).start()
     print(f"Clippy dashboard on http://127.0.0.1:{PORT}  (Ctrl+C to stop)")

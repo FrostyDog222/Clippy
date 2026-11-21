@@ -25,6 +25,14 @@ if not a.only:
         progress(-1, "Stopped: posting is switched OFF for both YouTube and TikTok (dashboard)"); print(json.dumps({"error": "both platforms are switched off in the dashboard: not posted"})); sys.exit(7)
     if _yt != _tt:
         a.only = "youtube" if _yt else "tiktok"
+import ytlimit  # noqa: E402
+_skip_note = None
+if ytlimit.until():  # YouTube refused an upload for its daily limit a while ago and has not reset yet: do not try again, post to TikTok only
+    _when = ytlimit.text(cfg.get("time_format", "12") == "12")
+    if a.only == "youtube" or (a.only is None and not _tt):
+        progress(-1, f"YouTube's daily upload limit is still active (until about {_when}): not posted"); print(json.dumps({"error": f"YOUTUBE_DAILY_LIMIT: still active until about {_when}, not posted"})); sys.exit(7)
+    if a.only is None and _yt and _tt:
+        a.only = "tiktok"; _skip_note = f"YouTube skipped: its daily upload limit is active until about {_when}"
 if os.environ.get("CLIPDESK_FORCE_MODE") in ("private", "public"):  # tests: forces the visibility no matter what the config says (a config edit once got overwritten and a test went public)
     mode = os.environ["CLIPDESK_FORCE_MODE"]
 elif a.mode == "auto":
@@ -49,6 +57,10 @@ try:
     res = json.loads(r.stdout.strip().splitlines()[-1])
 except Exception:
     res = {"error": f"no result from {tool}: {(r.stdout + r.stderr)[-300:]}"}
+if "YOUTUBE_DAILY_LIMIT" in str(res.get("error")):
+    ytlimit.set_hit()  # remembered: the next posts go to TikTok only until YouTube's day resets
+if _skip_note:
+    res["note"] = _skip_note
 if res.get("error") and not (res.get("youtube") or res.get("tiktok")):
     progress(-1, friendly(res["error"])[:200]); print(json.dumps(res)); sys.exit(r.returncode or 5)  # nothing was posted
 # partial success (e.g. YouTube ok, TikTok failed) is still recorded below so it is never lost or duplicated
