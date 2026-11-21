@@ -214,11 +214,9 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:p
     </div>
     <div class="hint" style="margin:-2px 0 14px">Only inside this time window Clippy looks for videos and makes clips. It posts them by itself only if <b>Auto-Post is ON</b> at that moment; with Auto-Post OFF the clips wait in Ready to post for you. The time format follows "Time and date format" above.</div>
     <h2 style="margin-top:6px">Visibility</h2>
-    <div class="r2">
-      <label class="f"><span>Private days at the start</span><div class="unit"><input type="number" id="private_days" min="0"><em>days</em></div><small id="pubnote"></small></label>
-      <div class="f"><span>Private period starts</span><input type="hidden" id="start_date"><div id="dd_start_date"></div></div>
-    </div>
-    <div class="hint" style="margin:-4px 0 0">Default is 0 = public from the start. To try it out first, enter a number of days: posts are Private (YouTube) and "Only me" (TikTok) for that long from the start date, then go public automatically.</div>
+    <label class="f"><span>Posts are private for the first</span><div class="unit"><input type="number" id="private_days" min="0"><em>days</em></div><small id="pubnote"></small></label>
+    <input type="hidden" id="start_date">
+    <div class="hint" style="margin:-4px 0 0">0 = public from the start. To try it out first, enter a number of days: from the moment you save it, automatic posts are Private (YouTube) and "Only me" (TikTok) for that many days, then go public by themselves.</div>
   </div>
     <div class="card"><h2>Live chat watching</h2>
   <div class="sw"><div><div>Live mode: watch live streams only</div><small style="color:var(--mut)"><b>ON = live streams only. OFF = videos and VODs only (the two never mix).</b> ON: the bot records several live streams on your topic (YouTube and Twitch) at once and reads their chat. When chat explodes (WTF, OMG, no way...) it cuts that moment, makes the Short and posts it, using the same daily limit, time window and gap as everything else. Streamers from your list are watched first. Uses bandwidth and some disk while it records.</small></div><button class="tg" id="lw" title="Turn live watching on or off" onclick="post('/api/live')"></button></div>
@@ -346,6 +344,7 @@ const mons='<select class="tsel2" id="ddm_'+k+'" onchange="ddSet(&quot;'+k+'&quo
 const yrs='<select class="tsel2" id="ddy_'+k+'" onchange="ddSet(&quot;'+k+'&quot;)">'+Array.from({length:12},(_,i)=>now.getFullYear()-1+i).map(x=>'<option'+(x===y?' selected':'')+'>'+x+'</option>').join('')+'</select>';
 el.innerHTML='<div class="dpts">'+(us?mons+days+yrs:days+mons+yrs)+'</div>'}
 function ddSet(k){const y=+$('ddy_'+k).value,mo=+$('ddm_'+k).value;let d=+$('ddd_'+k).value;d=Math.min(d,new Date(y,mo,0).getDate());$(k).value=y+'-'+pad2(mo)+'-'+pad2(d);$(k).dispatchEvent(new Event('input',{bubbles:true}));ddDraw(k)}
+function fmtDay(d){return is12()?d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):pad2(d.getDate())+'.'+pad2(d.getMonth()+1)+'.'+d.getFullYear()}
 function tpAll(){tpDraw('window_start');tpDraw('window_end');ddDraw('start_date')}
 function msStep(d){const e=$('min_score');e.value=Math.max(1,Math.min(10,Math.round(((+e.value||7)+d)*2)/2));e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))}
 function msNote(){const v=+($('min_score').value||7),e=$('msnote');let c='msn',t;
@@ -355,8 +354,8 @@ else if(v>=5){c+=' warn';t='Lower than the default: Clippy will also add moments
 else{c+=' bad';t='<b>Below 5 Clippy will add moments it rates weak</b>: hard to follow, not funny, or with little happening. That is usually not what you want: you will spend more time removing clips and may post things your audience scrolls past. You can still choose it.'}
 e.className=c;e.innerHTML=t}
 function fill(){NUM.concat(TXT).forEach(k=>$(k).value=draft[k]);tpAll();msNote();renderMode();renderChips();$('tf').className='tg'+(draft.use_trending_fallback?' on':'');$('ta').className='tg'+(draft.trending_any?' on':'');$('aup').className='tg'+(draft.auto_post?' on':'');$('apstate').textContent=draft.auto_post?'ON':'OFF';$('pyt').className='tg'+(draft.post_youtube!==false?' on':'');$('ptt').className='tg'+(draft.post_tiktok!==false?' on':'');$('ss').className='tg'+(draft.stop_on_strike?' on':'');$('au').className='tg'+(draft.auto_update!==false?' on':'');$('ac').className='tg'+(draft.ai_check?' on':'');$('qt').className='tg'+((draft.quality||'strict')==='strict'?' on':'');$('cs').className='tg'+(draft.cleanup_sources!==false?' on':'');renderLangs();renderProf();pub();upl()}
-function pub(){const d=new Date(draft.start_date+'T00:00');d.setDate(d.getDate()+(+draft.private_days||0));
-$('pubnote').textContent=(+draft.private_days)?'Goes public on '+d.toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'}):'Public from the start'}
+function pub(){const d=(+draft.private_days)!==(+(srv&&srv.private_days))?new Date(new Date().toDateString()):new Date(draft.start_date+'T00:00');d.setDate(d.getDate()+(+draft.private_days||0));
+$('pubnote').textContent=(+draft.private_days)?'Private until the end of '+fmtDay(new Date(d.getTime()-864e5)):'Public from the start'}
 function renderMode(){document.querySelectorAll('#mode button').forEach(b=>b.className=b.dataset.v===draft.creator_mode?'on':'');$('modenote').textContent=MODES[draft.creator_mode]}
 function renderChips(){$('chips').innerHTML=draft.creators.map((c,i)=>'<span class="chip">'+esc(c)+'<button title="Remove" onclick="rmC('+i+')">&times;</button></span>').join('')||'<span class="hint">No streamers yet</span>'}
 const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));

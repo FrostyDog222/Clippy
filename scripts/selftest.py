@@ -497,6 +497,19 @@ def test_stop_now_keeps_autopilot_on():
         d.HOLD = keep
 
 
+def test_private_days_count_from_the_day_they_are_set():
+    import sys, datetime as dtm
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    old = {**d.read_cfg(), "private_days": 0, "start_date": "2026-11-19"}
+    same = d.clean({**old, "private_days": 0}, old)
+    assert same["start_date"] == "2026-11-19"                                       # nothing changed: the date stays
+    new = d.clean({**old, "private_days": 7}, old)
+    assert new["private_days"] == 7 and new["start_date"] == dtm.date.today().isoformat()  # N set today: counts from today
+    again = d.clean({**new, "private_days": 7}, new)
+    assert again["start_date"] == new["start_date"]                                 # saving other settings does not restart the count
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

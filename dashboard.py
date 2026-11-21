@@ -533,6 +533,8 @@ def clean(new, old):
         assert HHMM.match(new[k]), f"{k} must be HH:MM"; out[k] = new[k]
     assert new["creator_mode"] in ("rotate", "random", "fixed"); out["creator_mode"] = new["creator_mode"]
     assert re.match(r"^\d{4}-\d{2}-\d{2}$", new["start_date"]); out["start_date"] = new["start_date"]
+    if out["private_days"] != int(old.get("private_days", 0) or 0):
+        out["start_date"] = dt.date.today().isoformat()  # "private for N days" counts from the moment the user sets N (there is no start-date field any more)
     out["creators"] = [str(s)[:60] for s in new["creators"]][:50]
     out["use_trending_fallback"] = bool(new["use_trending_fallback"])
     out["trending_any"] = bool(new.get("trending_any", False))
