@@ -109,6 +109,15 @@ def recent(vid, days=3):
         return False
 
 
+def age_days(vid):
+    """Days since upload (from the cached upload date that recent() already looked up); 3 when unknown."""
+    try:
+        ds = _cache().get(f"date:{vid}")
+        return max(0, (dt.date.today() - dt.datetime.strptime(ds, "%Y%m%d").date()).days)
+    except Exception:
+        return 3
+
+
 def flat_search(query):
     c = _cache(); key = f"search:{query}"; hit = c.get(key)
     if hit and time.time() - hit["t"] < 1800:  # the same search within 30 min reuses the answer (fewer requests, fewer blocks)
@@ -145,7 +154,9 @@ def search_creator(creator, days=3):
             if v:
                 out.append(v)
     out = sorted(out, key=lambda x: (x["duration"] > 3 * 3600, -x["views"]))[:8]  # the caller drops used/rejected ones, so look a bit further down the list
-    return [v for v in out if recent(v["id"], days)]
+    out = [v for v in out if recent(v["id"], days)]
+    out.sort(key=lambda x: (x["duration"] > 3 * 3600, -x["views"] / (age_days(x["id"]) + 0.5)))  # fresh and popular first: views per day since upload, not total views
+    return out
 
 
 def search_twitch_clips(skip_ids):
@@ -362,8 +373,8 @@ def snap_start(src, start):
     return max(ok) + 0.05 if ok else None
 
 
-def judge(v, score, job, n, c, creator):
-    """The checks of one moment (score bar, AI bit finder, AI preview / frame check, visual check). Returns None (not good enough) or what the cut needs plus a rank."""
+def _stage1(v, score, job, n, c, creator):
+    """Stage 1 of judging one moment, text only (score bar, music, AI bit finder): cheap. Returns None (not good enough) or the state stage 2 continues from."""
     log(f"  moment {n}: score {score} ({', '.join(c['why'])})")
     strict = CFG.get("quality", "strict") == "strict"  # quality over quantity is ON unless the user switches it off
     # strict no longer means "reject on any single weak signal" (that left runs empty): soft problems are penalties on one rank, only clear junk is rejected
@@ -415,6 +426,19 @@ def judge(v, score, job, n, c, creator):
                 bonus += 0.5  # the streamer reacting is what makes the clip
             c = {**c, "start": ws, "end": we, "text": " ".join(w["w"] for w in allw if ws <= w["s"] < we)[:400]}
             cut_range = ["--start", f"{ws:.2f}", "--end", f"{we:.2f}"]
+    return {"pen": pen, "c": c, "cut_range": cut_range, "win": win, "bonus": bonus, "win_score": win_score, "score": score, "strict": strict, "n": n}
+
+
+def _est(st):
+    """Rank of a stage-1 state (before the frame check): what decides which moments get the more expensive frame look first."""
+    ai = [x for x in (st["win_score"], st["c"].get("ai")) if x is not None]
+    return (sum(ai) / len(ai) if ai else 5.0) - sum(p for p, _ in st["pen"]) + st["score"] * 0.3 + st["bonus"]
+
+
+def _stage2(v, job, st):
+    """Stage 2: the AI frame look / visual check, snapping to a scene cut, the final rank. Returns None or what the cut needs."""
+    pen, c, cut_range, win, bonus, win_score, score, strict = (st[k] for k in ("pen", "c", "cut_range", "win", "bonus", "win_score", "score", "strict"))
+    scene, res_score = None, None
     if CFG.get("title_writer") in ("claude", "api"):  # an AI looks at 3 frames of the moment: skips non-GTA / nothing-happening moments, tells the title writer what happens
         import ai_check
         try:
@@ -466,7 +490,19 @@ def judge(v, score, job, n, c, creator):
         log("  penalties: " + "; ".join(f"-{p:g} {w}" for p, w in pen) + f" -> rank {rank:.1f}")
     feat = {"win": win_score, "frames": res_score, "ai": c.get("ai"), "score": score, "penalty": round(sum(p for p, _ in pen), 2), "sig": c.get("sig"), "why": c.get("why"),
             "notes": [f"-{p:g} {w}" for p, w in pen] + ([f"+{bonus:g} the streamer reacts"] if bonus else []), "bit": (win or {}).get("why"), "scene": scene}  # notes/bit/scene: shown in the dashboard score tooltip
+    try:  # after enough 👍/👎 ratings: a small nudge (at most +-1) toward moments that look like the ones the user liked (scripts/learn.py)
+        import learn
+        nudge = learn.adjust(feat)
+    except Exception:
+        nudge = 0.0
+    if nudge:
+        rank += nudge; feat["learned"] = nudge; feat["notes"].append(f"{nudge:+g} learned from your ratings")
     return {"c": c, "cut_range": cut_range, "scene": scene, "rank": rank, "weak": adj < 4.5, "feat": feat}  # weak = only a fallback for a run that would otherwise find nothing
+
+def judge(v, score, job, n, c, creator):
+    """Both stages for one moment (used by the live watcher and anywhere a single moment is judged)."""
+    st = _stage1(v, score, job, n, c, creator)
+    return None if st is None else _stage2(v, job, st)
 
 
 def reject(st, sf, vid):
@@ -592,8 +628,18 @@ def try_videos(vids, st, sf, dry, base_pct, creator=None):
             log("  no strong moments; rejected for 4 days"); reject(st, sf, v["id"]); continue
         judged = []  # judge the best few moments first, then cut the best-ranked one (AI judgement + viral score), not just the first that passes
         weak = []
+        # two stages: the cheap text judgement (bit finder, penalties) for every candidate, then the costly frame look only on the best ones, until enough pass
+        states = []
         for score, job, n, c in cands[: (4 if not v.get("custom") else 4 + 2 * (CUSTOM or {}).get("clips", 1))]:
-            jd = judge(v, score, job, n, c, creator)
+            st1 = _stage1(v, score, job, n, c, creator)
+            if st1:
+                states.append((st1, score, job, n))
+        states.sort(key=lambda x: -_est(x[0]))
+        need = 2 if not v.get("custom") else 1 + (CUSTOM or {}).get("clips", 1)
+        for k, (st1, score, job, n) in enumerate(states):
+            if len(judged) >= need:
+                log(f"  {len(states) - k} weaker moment(s) not frame-checked (the best ones already passed)"); break
+            jd = _stage2(v, job, st1)
             if jd and (not jd["weak"] or v.get("custom")):  # a link the user chose gets its best moments even when they are only fair
                 judged.append((jd["rank"], score, job, n, jd))
             elif jd:
@@ -711,6 +757,13 @@ def _main():
     sf = R / "autopost_state.json"
     st = json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {"used_video_ids": [], "posts": [], "consecutive_failures": 0}
     st.setdefault("rejected", []); expire_rejected(st)
+    try:  # learn from the user's ratings (does nothing until there are enough of them)
+        import learn
+        m = learn.fit()
+        if m:
+            log(f"learned from {m['n']} ratings: strongest signals {learn.top_features(m)}")
+    except Exception as e:
+        log(f"  learning from ratings skipped ({str(e)[:60]})")
     if a.relaxed:
         cfg["quality"] = "relaxed"; cfg["ai_check"] = False  # in memory only: the AI frame check does not veto in this test run
     configure(cfg)

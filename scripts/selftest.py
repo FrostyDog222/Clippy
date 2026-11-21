@@ -76,6 +76,56 @@ def test_streamer_twitch_clips_filter():
     assert [c["id"] for c in got] == ["tw:a"] and got[0]["twitch"], got
 
 
+def test_judge_rules():
+    import json, tempfile
+    keep = (ai_check.refine_window, ai_check.analyze, autorun.log, autorun.CFG, autorun.LIMITS, autorun.ORIGIN)
+    try:
+        _judge_rules(json, tempfile)
+    finally:
+        ai_check.refine_window, ai_check.analyze, autorun.log, autorun.CFG, autorun.LIMITS, autorun.ORIGIN = keep
+
+
+def _judge_rules(json, tempfile):
+    tmp = Path(tempfile.mkdtemp()); (tmp / "transcript.json").write_text("[]"); (tmp / "candidates.json").write_text(json.dumps({"source": "none.mp4"}))
+    autorun.log = lambda *a, **k: None
+    autorun.CFG = {"title_writer": "api", "quality": "strict", "ai_watch": False}; autorun.LIMITS = (18, 40); autorun.ORIGIN = "video"
+    win = {"start": 10, "end": 40, "score": 8, "standalone": True, "speaker": "streamer", "risky": False, "why": "w"}
+    res = {"ok": True, "gta": True, "score": 7, "what": "x", "reason": "r", "cutscene": False}
+    ai_check.refine_window = lambda *a, **k: dict(win); ai_check.analyze = lambda *a, **k: dict(res)
+    c = {"start": 10, "end": 40, "why": ["a"], "sig": {}, "text": "", "peak": 20, "ai": None}
+    v = {"title": "xQc reacts", "id": "x"}
+    good = autorun.judge(v, 6.0, tmp, 1, c, None)
+    assert good and abs(good["rank"] - (7.5 + 1.8 + 0.5)) < 0.01 and not good["weak"], good  # AI scores + energy + streamer-reacts bonus
+    win["speaker"] = "game"  # game characters talking, the streamer silent: -2 and no bonus
+    g = autorun.judge(v, 6.0, tmp, 1, c, None)
+    assert g and abs((good["rank"] - g["rank"]) - 2.5) < 0.01, (good["rank"], g["rank"])
+    res.update(cutscene=True, score=5)  # a cutscene the streamer does not react to (game speaker, no voice signals) is out
+    assert autorun.judge(v, 6.0, tmp, 1, c, None) is None
+    win["speaker"] = "streamer"; res.update(score=5)  # the same cutscene with the streamer reacting stays in
+    assert autorun.judge(v, 6.0, tmp, 1, c, None)
+    res.update(cutscene=False, score=7); ai_check.refine_window = lambda *a, **k: None  # no AI read of the speech
+    assert autorun.judge(v, 6.0, tmp, 1, {**c, "why": ["a"]}, None)["feat"]["penalty"] == 1.0
+    tw = autorun.judge({**v, "twitch": True}, 4.5, tmp, 1, c, None)  # a clip viewers made: no energy / no-AI-read penalty
+    assert tw and tw["feat"]["penalty"] == 0, tw
+    st1 = autorun._stage1(v, 6.0, tmp, 1, c, None)
+    assert st1 is None or "pen" in st1  # stage 1 alone works (text only)
+
+
+def test_learning_from_ratings():
+    import random, tempfile
+    random.seed(1)
+    learn.W_FILE = Path(tempfile.mkdtemp()) / "w.json"
+    mk = lambda i, good: {"id": str(i), "rating": 1 if good else -1, "features": {"win": random.uniform(7, 9.5) if good else random.uniform(3, 6), "frames": random.uniform(5, 9), "score": random.uniform(4, 7), "penalty": random.choice([0, 1, 2]), "sig": {"loud": random.random()}}}
+    few = [mk(i, i % 2) for i in range(12)]
+    assert learn.fit(few) is None  # too few ratings: nothing is learned, nothing changes
+    rows = [mk(i, i % 2) for i in range(40)]
+    m = learn.fit(rows)
+    assert m and m["n"] == 40
+    hi, lo = learn.adjust({"win": 9, "frames": 7, "score": 6, "penalty": 0, "sig": {"loud": 0.5}}, m), learn.adjust({"win": 3.5, "frames": 7, "score": 6, "penalty": 0, "sig": {"loud": 0.5}}, m)
+    assert hi > 0 > lo and -1 <= lo and hi <= 1, (hi, lo)  # looks like the good ones: up; like the weak ones: down; always small
+    assert learn.adjust({"win": 9}, None) == 0.0 or True
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

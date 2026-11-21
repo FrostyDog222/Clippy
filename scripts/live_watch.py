@@ -83,6 +83,7 @@ class Watch:
         self.p = subprocess.Popen([PY, "scripts/live.py", self.url, "--minutes", str(SESSION_MIN), "--before", "25", "--viewers", str(int(self.s.get("viewers") or 0))], cwd=R, stdout=self.logf, stderr=subprocess.STDOUT,
                                   env={**os.environ, "CLIP_DESK_HOME": str(R), "PYTHONIOENCODING": "utf-8"}, creationflags=NOWIN)
         self.seen, self.spikes = {f.name for f in self.dir.glob("spike_*.mp4")}, 0  # spike clips left from an earlier session are stale: ignore them
+        self.rates = []  # chat rates of this stream's spikes so far: a spike is judged against its own stream's usual level, not against a bigger stream
 
     def alive(self):
         return self.p.poll() is None
@@ -113,7 +114,9 @@ class Watch:
         for f in sorted(self.dir.glob("spike_*.mp4")):
             if f.name not in self.seen and f.stat().st_size > 0 and time.time() - f.stat().st_mtime > 3:
                 self.seen.add(f.name); self.spikes += 1
-                out.append({"path": f, "rate": rates.get(f.name, 0), "born": time.time(), "s": self.s})
+                r = rates.get(f.name, 0); self.rates.append(r)
+                base = sorted(self.rates)[len(self.rates) // 2] or 1  # the median spike of this stream so far (the first one counts as 1.0)
+                out.append({"path": f, "rate": r, "rel": r / base, "born": time.time(), "s": self.s})
         return out
 
 
@@ -210,7 +213,7 @@ def main():
                         if p.get("date") == today and not p.get("deleted"):
                             cnt[norm(p.get("channel") or "")] = cnt.get(norm(p.get("channel") or ""), 0) + 1
                     maxc = int(cfg.get("max_per_creator_per_day", 1))
-                    queue.sort(key=lambda q: -q["rate"])
+                    queue.sort(key=lambda q: (-q.get("rel", 1.0), -q["rate"]))  # relative to each stream's own usual spikes, so a small stream's real peak is not buried by a big stream's normal chat
                     pick = next((q for q in queue if cnt.get(norm(q["s"]["channel"]), 0) < maxc), None)
                     if pick:
                         queue.remove(pick)
