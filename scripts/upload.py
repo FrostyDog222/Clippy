@@ -272,7 +272,7 @@ def cmd_status():
     from playwright.sync_api import sync_playwright
     import datetime as dt
     out = {"youtube": None, "tiktok": None, "ts": dt.datetime.now().isoformat(timespec="seconds")}
-    if not quiet_screen(0):  # a full-screen app is in front: do not open a window now, keep the last known result
+    if browser_mode() == "visible" and not quiet_screen(0):  # a full-screen app is in front: do not open a window now, keep the last known result
         print(json.dumps({"skipped": "a full-screen app is active"})); return 8
     proc = start_chrome(PORT)
     try:
@@ -308,7 +308,7 @@ def cmd_post(a):
     if not clip.exists():
         print(json.dumps({"error": "clip not found"})); return 2
     res = {"youtube": None, "tiktok": None, "error": None}
-    if browser_mode() != "headless" and not quiet_screen(1800):  # never open a window over a game or video: wait up to 30 min
+    if browser_mode() == "visible" and not quiet_screen(1800):  # a visible window must never open over a game or video: wait up to 30 min (off-screen / minimized / headless windows open in the background and never take the focus)
         print(json.dumps({"youtube": None, "tiktok": None, "error": "a full-screen app stayed active for 30 minutes: nothing was posted, try again when you are done"})); return 8
     proc = start_chrome(PORT, a.only); code = 0; errors = []
     try:
