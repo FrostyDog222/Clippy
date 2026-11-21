@@ -299,6 +299,42 @@ def test_description_is_a_real_line_not_one_word():
     assert "AT LEAST 4 words" in p and not any("one-word" in v for v in ai_title.VOICES)
 
 
+def test_a_run_can_make_several_clips():
+    cuts = []
+    keep = (autorun.try_candidate, autorun.log, autorun.WANT, autorun.MADE)
+    autorun.log = lambda *a, **k: None
+    autorun.try_candidate = lambda v, score, job, n, c, creator, dry, memo=None, review_only=False: (cuts.append((v["id"], n)) or 0)
+    def pending(*moments):  # (video, moment number, rank)
+        autorun.PENDING.clear(); by = {}
+        for vid, n, rank in moments:
+            by.setdefault(vid, []).append((rank, 5.0, None, n, {"c": {}}))
+        for vid, judged in by.items():
+            autorun.PENDING.append(({"id": vid, "title": vid}, None, judged))
+    try:
+        for want, moments, expect in ((1, [("a", 1, 9), ("b", 1, 10), ("c", 1, 8)], [("b", 1)]),
+                                      (2, [("a", 1, 9), ("b", 1, 10), ("c", 1, 8)], [("b", 1), ("a", 1)]),  # best two, from different videos
+                                      (3, [("a", 1, 9), ("a", 2, 9.5), ("b", 1, 7)], [("a", 2), ("b", 1), ("a", 1)]),  # one per video first, then more from the same video
+                                      (5, [("a", 1, 9), ("b", 1, 10)], [("b", 1), ("a", 1)])):  # fewer good moments than wanted: just those
+            cuts.clear(); autorun.WANT, autorun.MADE = want, 0; pending(*moments)
+            code = autorun.cut_pending(False)
+            assert code == 0 and cuts == expect, (want, cuts)
+            assert autorun.MADE == len(expect) and autorun.enough() == (len(expect) >= want)
+    finally:
+        autorun.try_candidate, autorun.log, autorun.WANT, autorun.MADE = keep; autorun.PENDING.clear()
+
+
+def test_clips_per_run_limits():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    base = d.read_cfg()
+    assert d.clean({**base, "auto_clips_per_run": 99}, base)["auto_clips_per_run"] == 10  # at most 10 per run
+    assert d.clean({**base, "auto_clips_per_run": -5}, base)["auto_clips_per_run"] == 1 and d.clean({**base, "auto_clips_per_run": 0}, base)["auto_clips_per_run"] == 1
+    assert d.clean({**base, "auto_clips_per_run": 4}, base)["auto_clips_per_run"] == 4
+    old = {**base, "clips_per_run": 3}
+    assert d.clean({**base, "clips_per_run": 9}, old)["clips_per_run"] == 3  # the manual number is saved only by its own control (a stale settings page cannot overwrite it)
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

@@ -615,21 +615,46 @@ PENDING = []  # (video, creator, judged moments) of videos that were good but no
 GOOD_RANK, MAX_COMPARE = 8.0, 3
 
 
-def cut_pending(dry):
-    """Cut the best-ranked moment over all videos judged so far (the next-best one when a cut fails)."""
-    allj = [(rank, v, creator, score, job, n, jd) for v, creator, judged in PENDING for rank, score, job, n, jd in judged]
+DONE_VIDS = set()  # sources that already gave a clip in this run (never used twice)
+WANT, MADE = 1, 0  # clips wanted in this run / clips made so far (the dashboard's "clips this run"; fewer is fine when Clippy cannot find enough good ones)
+
+
+def enough():
+    return MADE >= WANT
+
+
+def cut_pending(dry, n=None):
+    """Cut the best-ranked moments over all videos judged so far: one per video first (variety), then more from the same videos if still needed; the next-best when a cut fails.
+    n = how many (default: what the run still needs). Returns an exit code when at least one was cut, else None."""
+    global MADE
+    n = max(1, (WANT - MADE) if n is None else n)
+    allj = sorted(((rank, v, creator, score, job, k, jd) for v, creator, judged in PENDING for rank, score, job, k, jd in judged), key=lambda x: -x[0])
     PENDING.clear()
-    for rank, v, creator, score, job, n, jd in sorted(allj, key=lambda x: -x[0]):
-        log(f"  best-ranked moment {n} of '{v['title'][:40]}' (rank {rank:.1f})")
-        code = try_candidate(v, score, job, n, jd["c"], creator, dry, memo=jd)
-        if code is not None:
-            return code
-    return None
+    made, used, last = 0, set(), None
+    for second_pass in (False, True):
+        for rank, v, creator, score, job, k, jd in allj:
+            if made >= n:
+                break
+            if (v["id"], k) in used or (not second_pass and any(u[0] == v["id"] for u in used)):
+                continue
+            log(f"  best-ranked moment {k} of '{v['title'][:40]}' (rank {rank:.1f})")
+            code = try_candidate(v, score, job, k, jd["c"], creator, dry, memo=jd)
+            if code is not None:
+                made += 1; MADE += 1; used.add((v["id"], k)); DONE_VIDS.add(v["id"]); last = code
+    return last
+
+
+def flush(dry):
+    """Cut what is waiting; returns the exit code only when the run has all the clips it wanted (else None: look at the next source)."""
+    code = cut_pending(dry) if PENDING else None
+    return code if (code is not None and enough()) else None
 
 
 def try_videos(vids, st, sf, dry, base_pct, creator=None):
     """Analyse videos in order; for each, try its 3 best strong moments. Returns an exit code if it posted/dry-ran, else None."""
     for v in vids:
+        if v["id"] in DONE_VIDS and not v.get("custom"):
+            continue
         bl = [norm(x) for x in re.split(r"[,;\n]", str(CFG.get("blocked_streamers", ""))) if norm(x)]  # streamers the user never wants clipped (Settings > Streamers)
         if not v.get("custom") and any(b in norm(v.get("channel", "")) or b in norm(v.get("title", "")) for b in bl):
             log(f"  skipping {v['title'][:50]}: on your 'never clip' list"); continue
@@ -666,7 +691,7 @@ def try_videos(vids, st, sf, dry, base_pct, creator=None):
             PENDING.append((v, creator, judged))
             best = max(j[0] for j in judged)
             log(f"  best moment of this video: rank {best:.1f}" + ("" if best >= GOOD_RANK else f" (below {GOOD_RANK:g}: also looking at other videos)"))
-            if best >= GOOD_RANK or len(PENDING) >= MAX_COMPARE:
+            if WANT == 1 and (best >= GOOD_RANK or len(PENDING) >= MAX_COMPARE):  # (with several clips wanted, everything good is collected and the best ones are cut at the end of each source)
                 code = cut_pending(dry)
                 if code is not None:
                     return code
@@ -746,6 +771,8 @@ def main():
     code = "interrupted"
     try:
         code = _main()
+        if WANT > 1 and MADE:
+            progress(100, f"Done: {MADE} of {WANT} clips are ready in the dashboard"); log(f"made {MADE} of {WANT} clips")
         return code
     finally:  # always free the big downloaded source videos once clips exist (see cleanup.py)
         secs = int(time.time() - t_start)
@@ -753,7 +780,7 @@ def main():
         pidf.unlink(missing_ok=True)
         try:  # the last runs' lengths: the dashboard turns them into "a typical run takes about ..."
             hf = R / "run_history.json"; h = json.loads(hf.read_text(encoding="utf-8")) if hf.exists() else []
-            h.append({"start": dt.datetime.fromtimestamp(t_start).isoformat(timespec="seconds"), "secs": secs, "result": str(code)})
+            h.append({"start": dt.datetime.fromtimestamp(t_start).isoformat(timespec="seconds"), "secs": secs, "result": str(code), "clips": max(1, MADE)})
             hf.write_text(json.dumps(h[-20:]), encoding="utf-8")
         except Exception:
             pass
@@ -785,6 +812,12 @@ def _main():
     if a.relaxed:
         cfg["quality"] = "relaxed"; cfg["ai_check"] = False  # in memory only: the AI frame check does not veto in this test run
     configure(cfg)
+    global WANT
+    WANT = 1 if (a.url or cfg.get("auto_post")) else max(1, min(10, int(a.clips or 1)))  # several clips per run is for "prepare only" (Auto-Post OFF): posting many in a row would break the schedule
+    try:  # tell the dashboard how many clips this run wants (its time estimate scales with it)
+        pidf = R / "autorun.pid"; pd = json.loads(pidf.read_text(encoding="utf-8")); pd["want"] = WANT; pidf.write_text(json.dumps(pd))
+    except Exception:
+        pass
     if a.url:  # a link the user chose: no searching, no daily limits
         return _custom(a, st, sf)
     creators, trending_on = list(cfg.get("creators") or []), bool(cfg.get("use_trending_fallback") or cfg.get("trending_any"))
@@ -838,10 +871,9 @@ def _main():
             code = try_videos([c], st, sf, a.dry, 20, who)
             if code is not None:
                 return code
-        if PENDING:  # good moments, none great: cut the best of them before looking at YouTube at all
-            code = cut_pending(a.dry)
-            if code is not None:
-                return code
+        code = flush(a.dry)  # good moments, none great: cut the best of them before looking at YouTube at all
+        if code is not None:
+            return code
     # 1) the user's list, in order (YouTube videos)
     for ci, creator in enumerate(creators[:10]):
         progress(10 + ci * 2, f"Looking for {creator}")
@@ -851,6 +883,9 @@ def _main():
             vids = [v for v in search_creator(creator, 7) if v["id"] not in skip_ids][:3]
         log(f"  {len(vids)} videos to look at")
         code = try_videos(vids, st, sf, a.dry, 25, creator)
+        if code is not None:
+            return code
+        code = flush(a.dry)
         if code is not None:
             return code
     # 2) trending / popular: a BACKUP when the streamers gave nothing (or the list is empty). The "trending backup" switch alone decides it, in every mode.
@@ -866,11 +901,13 @@ def _main():
         code = try_videos(vids, st, sf, a.dry, 35)
         if code is not None:
             return code
-    if PENDING:  # good moments were found but none was great: cut the best of all
-        code = cut_pending(a.dry)
-        if code is not None:
-            return code
-    if NEAR and not a.dry:  # nothing passed: the closest moment goes to "Ready to post" (never posted by itself) so the user decides
+    code = cut_pending(a.dry) if PENDING else None  # good moments were found but not all the wanted clips: cut the best of what is left
+    if MADE and not enough():
+        log(f"made {MADE} of the {WANT} clips wanted: that is all the good moments Clippy found right now")
+        return code if code is not None else 0
+    if code is not None:
+        return code
+    if NEAR and not a.dry and not MADE:  # nothing passed: the closest moment goes to "Ready to post" (never posted by itself) so the user decides
         rank, v, score, job, n, jd, creator = NEAR
         log(f"nothing passed every check: the closest moment (rank {rank:.1f}) goes to Ready to post for your decision")
         code = try_candidate(v, score, job, n, jd["c"], creator, False, memo=jd, review_only=True)

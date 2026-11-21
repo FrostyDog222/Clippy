@@ -77,10 +77,10 @@ def run_timing():
     except Exception:
         return None
     try:
-        hist = [h["secs"] for h in json.loads((R / "run_history.json").read_text(encoding="utf-8"))[-8:] if h.get("secs", 0) >= 90 and h.get("result") == "0"]  # only runs that finished normally count: a crashed or stopped run says nothing about how long a run takes
+        hist = [h["secs"] / max(1, h.get("clips", 1)) for h in json.loads((R / "run_history.json").read_text(encoding="utf-8"))[-8:] if h.get("secs", 0) >= 90 and h.get("result") == "0"]  # seconds PER CLIP  # only runs that finished normally count: a crashed or stopped run says nothing about how long a run takes
     except Exception:
         hist = []
-    typical = sum(hist) / len(hist) if hist else None
+    typical = (sum(hist) / len(hist)) * max(1, int(d.get("want", 1))) if hist else None  # a typical clip times the clips this run wants
     pct = (progress() or {}).get("pct") or 0
     slow = bool(typical and elapsed >= typical)  # past the typical length: say so instead of a made-up countdown
     eta = None if (not typical or slow) else max(60, typical - elapsed)
@@ -112,11 +112,11 @@ def running():
     return bool(p) and 0 < p["pct"] < 100 and (dt.datetime.now() - dt.datetime.fromisoformat(p["ts"])).total_seconds() < 45 * 60 and not run_stale()
 
 
-def run_now(force=False):
+def run_now(force=False, clips=1):
     """Clippy's own pipeline (scripts/autorun.py, no Claude). force=True is the manual "Run now" button (ignores the daily limit / window / gap);
     the autopilot calls it without force so tick.py decides. (This used to start run_slot.bat, the old Claude-driven mode.)"""
     set_prog(1, "Starting")
-    subprocess.Popen([BGPY, "scripts/autorun.py", *(["--force"] if force else [])], cwd=R, creationflags=NOWIN | DETACHED,
+    subprocess.Popen([BGPY, "scripts/autorun.py", *(["--force"] if force else []), "--clips", str(max(1, min(10, int(clips))))], cwd=R, creationflags=NOWIN | DETACHED,
                      stdout=open(R / "autorun.log", "a", encoding="utf-8"), stderr=subprocess.STDOUT)
 
 
@@ -409,7 +409,9 @@ def autopilot_loop():
                     continue
                 ok, _, _ = tick.decide(c, sched_posts(c), dt.datetime.now(), PAUSE.exists())
                 if ok:
-                    run_now(force=True)  # our own check above already applied the schedule (autorun would only look at real posts)
+                    today = dt.date.today().isoformat()
+                    left = int(c.get("posts_per_day", 1)) - len([p for p in sched_posts(c) if p.get("date") == today and not p.get("deleted")])
+                    run_now(force=True, clips=max(1, min(int(c.get("auto_clips_per_run", 1) or 1), left)))  # several clips per automatic run, never past the day's quota  # our own check above already applied the schedule (autorun would only look at real posts)
         except Exception:
             pass
 
@@ -510,6 +512,7 @@ def clean(new, old):
     out["use_trending_fallback"] = bool(new["use_trending_fallback"])
     out["trending_any"] = bool(new.get("trending_any", False))
     out["display_name"] = re.sub(r"\s+", " ", str(new.get("display_name", ""))).strip()[:40]  # the name in the welcome line
+    out["auto_clips_per_run"] = max(1, min(10, int(new.get("auto_clips_per_run", 1) or 1)))  # clips per automatic (Autopilot) run; the manual "clips this run" is saved right away by /api/clips
     out["blocked_streamers"] = ", ".join(x.strip() for x in re.split(r"[,;\n]", str(new.get("blocked_streamers", ""))) if x.strip())[:300]  # streamers that are never clipped
     out["auto_update"] = bool(new.get("auto_update", True))  # install new Clippy versions by itself (settings and clips are never touched)
     # auto_post is not set here: its switches (Ready to post and Settings) save immediately through /api/autopost; OFF (default) = finished clips wait in "Ready to post"
@@ -869,6 +872,11 @@ class H(http.server.BaseHTTPRequestHandler):
         elif self.path == "/api/learn/reset":  # start fresh: the learned model goes, the ratings log is set aside (renamed)
             import learn
             learn.reset(); _LEARN["v"] = None
+        elif self.path == "/api/clips":  # "how many clips should this run make" (manual runs), saved right away
+            try:
+                n = int(json.loads(self.rfile.read(n))["n"]); c = read_cfg(); c["clips_per_run"] = max(1, min(10, n)); save_cfg(c)
+            except Exception:
+                return self.send(400, "bad number", "text/plain")
         elif self.path == "/api/autopost":  # Auto-Post on/off right away (ON: finished clips are posted by Clippy; OFF: they wait in Ready to post)
             c = read_cfg(); c["auto_post"] = not c.get("auto_post", False); save_cfg(c)
         elif self.path == "/api/autopilot":
@@ -892,7 +900,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.send(409, "Live mode is ON: the bot only uses live streams. Turn 'Live chat watching' off to post from videos.", "text/plain")
             if blocked_msg(read_cfg()):
                 return self.send(409, blocked_msg(read_cfg()), "text/plain")
-            run_now(True)  # the manual button: run now even outside the schedule
+            run_now(True, int(read_cfg().get("clips_per_run", 1) or 1))  # the manual button: run now even outside the schedule, with the "clips this run" number
         elif self.path in ("/api/signin", "/api/signcheck"):
             err = start_signin() if self.path == "/api/signin" else start_check()
             if err:
