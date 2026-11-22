@@ -214,8 +214,8 @@ def stop_runs():
     except Exception:
         pass
     ps = ("Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne %d -and $_.CommandLine -match "
-          "'AUTOPOST\\.md|run_slot\\.bat|serve_file\\.py|gtavi-clipdesk.*(autorun|cut|moments|check|live_watch|live|post_clip|upload|stats)\\.py' } | "
-          "ForEach-Object { taskkill /PID $_.ProcessId /T /F | Out-Null }" % os.getpid())
+          "'AUTOPOST\\.md|run_slot\\.bat|serve_file\\.py|%s.*(autorun|cut|moments|check|live_watch|live|post_clip|upload|stats)\\.py' } | "
+          "ForEach-Object { taskkill /PID $_.ProcessId /T /F | Out-Null }" % (os.getpid(), re.escape(str(R)).replace("'", "''")))
     subprocess.run(["powershell", "-NoProfile", "-Command", ps], creationflags=NOWIN)
     for f in (R / "autorun.pid", R / "post.lock", SUSP):
         f.unlink(missing_ok=True)

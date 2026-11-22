@@ -29,7 +29,7 @@ MAX_W = 1280  # analysis width
 def model_path():
     import hashlib
     # known places, checked by hash: shipped with the release, the profile cache (also when LOCALAPPDATA is missing/redirected in a background process)
-    for p in (Path(__file__).resolve().parent.parent / "models" / MODEL.name, MODEL, Path.home() / "AppData" / "Local" / "Clippy" / "models" / MODEL.name, Path.home() / "AppData" / "Local" / "gtavi-claudecode" / "models" / MODEL.name):
+    for p in (Path(__file__).resolve().parent.parent / "models" / MODEL.name, MODEL, Path.home() / "AppData" / "Local" / "Clippy" / "models" / MODEL.name):
         try:
             if p.exists() and hashlib.sha256(p.read_bytes()).hexdigest() == MODEL_SHA256:
                 return str(p)
