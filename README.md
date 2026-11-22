@@ -85,6 +85,10 @@ These files are **the memory of your Clippy**, and they are worth protecting:
 
 Clippy does not require an AI provider. AI integration is optional, and users can configure their own provider or local LLM. No AI credentials or user data are routed through the developer.
 
+## Twitch clips (made by viewers)
+
+Clips that viewers save on Twitch are usually the funniest or most interesting moments, and they are quick to process. Clippy looks at them first. In Settings, Streamers, **Twitch clips**, you can choose how far back to look (last week, last month or all time), how many clips to consider per streamer, whether to use **only** Twitch clips (no YouTube videos), and a checkmark to **prioritize viewer-made Twitch clips**: when it is on, the most viewed Twitch clips of your topic (any streamer) are looked at before any YouTube video; when it is off, everything runs in the normal order.
+
 ## Videos or live streams?
 
 We recommend **videos and VODs**: Clippy can read the whole video and go straight to the interesting parts. **Live streams work just fine too**, they just take longer: Clippy has to wait for something to happen instead of jumping to the good parts, and sometimes nothing worth clipping happens at all. It depends on the stream, but it works. Defaults: minimum score 7 for videos and 6 for streams; you can lower them (2-3 allows nearly everything) if you want more clips and accept weaker ones.

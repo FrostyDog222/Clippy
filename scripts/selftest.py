@@ -1025,6 +1025,37 @@ def test_polish2_picture_length_and_streamer_names():
     assert learn.channel_of({"features": {"channel": "Caseoh_ VODS"}}) == learn.channel_of({"creator": "caseoh_"})
 
 
+def test_twitch_clip_options_are_validated_and_reach_the_search():
+    import sys, copy
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent)); sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import dashboard as d, autorun, twitch
+    base = d.read_cfg(); base["twitch_priority"] = False   # (the real file may have it on)
+    ok = d.clean({**copy.deepcopy(base), "twitch_clips": "only", "twitch_period": "month", "twitch_per_streamer": 12}, base)
+    assert (ok["twitch_clips"], ok["twitch_period"], ok["twitch_per_streamer"]) == ("only", "month", 12)
+    assert d.clean({**copy.deepcopy(base), "twitch_priority": True}, base)["twitch_priority"] is True and d.clean({**copy.deepcopy(base)}, base)["twitch_priority"] is False   # the checkmark: on = prioritize, off = normal order
+    bad = d.clean({**copy.deepcopy(base), "twitch_clips": "nope", "twitch_period": "year", "twitch_per_streamer": 999}, base)
+    assert (bad["twitch_clips"], bad["twitch_period"], bad["twitch_per_streamer"]) == ("first", "week", 15)           # unknown values fall back, the count is capped
+    seen = {}
+    keep_cc, keep_tp = twitch.channel_clips, getattr(autorun, "TP", None)
+    twitch.channel_clips = lambda name, limit=15, period="LAST_WEEK": seen.update(limit=limit, period=period) or []
+    autorun.TP = {"any": True, "gta": False, "name": "x", "matches": lambda g: True}
+    try:
+        autorun.creator_twitch_clips("someone", set(), 12, "LAST_MONTH")
+    finally:
+        twitch.channel_clips, autorun.TP = keep_cc, keep_tp
+    assert seen == {"limit": 36, "period": "LAST_MONTH"}                                                         # more clips per streamer and a longer period reach the Twitch query
+
+
+def test_edge_strip_search_finds_nothing_in_an_empty_frame_and_never_crashes():
+    import sys
+    import numpy as np
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import facecam
+    frames = [np.zeros((360, 640, 3), np.uint8) for _ in range(6)]
+    face, hits = facecam.edge_strip_face(frames)
+    assert face is None and hits == 0                                   # no face in a black frame: nothing is invented (polish 3: small / dark webcams are searched on the enlarged side strips)
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

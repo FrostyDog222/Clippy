@@ -31,6 +31,7 @@ def read_cfg():
             if secretstore.exists("title_api_key") and not secretstore.exists("key_p1"):
                 secretstore.save("key_p1", secretstore.load("title_api_key"))
     c.setdefault("live_watch", False); c.setdefault("live_max_streams", 3); c.setdefault("ai_check", False); c.setdefault("quality", "strict")
+    c.setdefault("twitch_clips", "first"); c.setdefault("twitch_period", "week"); c.setdefault("twitch_per_streamer", 6); c.setdefault("twitch_priority", False)  # Twitch clips (made by viewers): where to look, how far back, how many per streamer
     return c
 
 
@@ -590,6 +591,13 @@ def clean(new, old):
     if out["private_days"] != int(old.get("private_days", 0) or 0):
         out["start_date"] = dt.date.today().isoformat()  # "private for N days" counts from the moment the user sets N (there is no start-date field any more)
     out["creators"] = [str(s)[:60] for s in new["creators"]][:50]
+    out["twitch_clips"] = new.get("twitch_clips") if new.get("twitch_clips") in ("first", "only") else "first"
+    out["twitch_period"] = new.get("twitch_period") if new.get("twitch_period") in ("week", "month", "all") else "week"
+    try:
+        out["twitch_per_streamer"] = max(3, min(15, int(new.get("twitch_per_streamer", 6) or 6)))
+    except (TypeError, ValueError):
+        out["twitch_per_streamer"] = 6
+    out["twitch_priority"] = bool(new.get("twitch_priority", False))
     out["use_trending_fallback"] = bool(new["use_trending_fallback"])
     out["trending_any"] = bool(new.get("trending_any", False))
     out["time_format"] = new.get("time_format") if new.get("time_format") in ("12", "24") else "12"  # 12-hour (US) or 24-hour (Europe) times and dates

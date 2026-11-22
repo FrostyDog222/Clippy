@@ -457,6 +457,19 @@ def where(box):
     return f"{v}-{hz} {round(bw * 100)}% x {round(bh * 100)}%"
 
 
+def edge_strip_face(frames, score=0.7, scale=2.0):
+    """A small or dark webcam face (2-3% of the frame wide) is missed on the whole frame. Webcams sit at the side edges, so look at the left and right strips only, enlarged:
+    returns (face box in frame pixels, hits) of the best stable face there, or (None, 0)."""
+    h, w = frames[0].shape[:2]
+    best, best_hits = None, 0
+    for x0, x1 in ((0.0, 0.32), (0.68, 1.0)):
+        strips = [cv2.resize(f[:, int(x0 * w):int(x1 * w)], None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC) for f in frames]
+        box, hits = stable_face(detect_faces(strips, score=score), len(strips))
+        if box is not None and hits > best_hits:
+            best, best_hits = np.array([box[0] / scale + x0 * w, box[1] / scale, box[2] / scale, box[3] / scale]), hits
+    return best, best_hits
+
+
 def find_cam(video, start=None, end=None):
     frames = sample_frames(video, start, end)
     if len(frames) < 4:
@@ -466,6 +479,13 @@ def find_cam(video, start=None, end=None):
     face, hits = stable_face(dets, len(frames))
     need = max(3, int(len(frames) * 0.5))
     total = sum(len(d) for d in dets)
+    if face is None or hits < need:  # polish 3: a small / dark webcam face is found again on the enlarged side strips
+        try:
+            sface, shits = edge_strip_face(frames)
+        except Exception:
+            sface, shits = None, 0
+        if sface is not None and shits >= need:
+            face, hits = sface, shits
     if face is None or hits < need:
         return {"mode": "none", "confidence": 0.0, "faces_seen": total,
                 "reason": f"no face stable across frames (best cluster {hits}/{len(frames)}, need {need})"}
