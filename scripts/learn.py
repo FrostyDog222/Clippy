@@ -9,7 +9,7 @@ How it learns (so it fits every user: gaming streams, podcasts, IRL, other games
 laughter, motion, the AI's scores, clip length, Twitch/YouTube source, speech speed ...) plus a per-streamer / per-channel taste. It starts after a handful of ratings
 and gets more trusted as more come in: the nudge is scaled by a confidence that grows with the number of 👍/👎 and drops to 0 when the ratings show no pattern
 (leave-one-out check). The nudge is at most +-1.5 on a rank of about 5-10, so it steers, it never takes over."""
-import datetime as dt, json, math, pathlib, statistics as stt
+import datetime as dt, json, math, pathlib, statistics as stt, time
 
 R = pathlib.Path(__file__).resolve().parent.parent
 W_FILE = R / "learned_weights.json"
@@ -62,7 +62,11 @@ def off_moment(r):
 
 def channel_of(r):
     f = r.get("features") or {}
-    return str(f.get("channel") or r.get("creator") or "").strip().lower()
+    try:
+        import pick_rules
+        return pick_rules.norm_channel(f.get("channel") or r.get("creator") or "")  # polish 2: one key per streamer, however it is spelled
+    except Exception:
+        return str(f.get("channel") or r.get("creator") or "").strip().lower()
 
 
 def load():
@@ -90,6 +94,11 @@ def load_all():
             continue
         if not d.get("features"):
             continue  # clips from before the signals were saved cannot teach anything
+        try:  # polish 1: a clip that is still waiting for you (not rated, not marked 😐, made in the last 2 days) has not been judged yet: it is not a "meh"
+            if d.get("rating") not in (1, -1) and not d.get("reviewed") and time.time() - int(f.stem.split("__")[0]) < 2 * 86400:
+                continue
+        except Exception:
+            pass
         rows[f.stem] = {"id": f.stem, "rating": d.get("rating") if d.get("rating") in (1, -1) else 0, "rank": d.get("rank"), "features": d.get("features"),
                         "seconds": d.get("seconds"), "creator": d.get("source_channel") or d.get("creator"), "reason": d.get("reason") if d.get("rating") == -1 else None, "reasons": d.get("reasons") if d.get("rating") == -1 else None}
     try:  # how the posted clips did (views.py): a weaker second teacher, only where the user did not rate the clip

@@ -76,8 +76,8 @@ def sample_frames(video, start, end, n=N_FRAMES):
     return frames
 
 
-def detect_faces(frames):
-    det = cv2.FaceDetectorYN.create(model_path(), "", (320, 320), 0.7, 0.3, 5000)
+def detect_faces(frames, score=0.7):
+    det = cv2.FaceDetectorYN.create(model_path(), "", (320, 320), score, 0.3, 5000)
     out = []
     for f in frames:
         h, w = f.shape[:2]

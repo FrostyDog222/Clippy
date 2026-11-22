@@ -231,13 +231,13 @@ def panel_crop(box, face, sw, sh, ph=int(H * 0.38), zoom=3.4):
     return ev(cw), ev(ch), ev(x0), ev(y0)
 
 
-def video_filter(layout, cam, ass, band=None, cam_side='right', src=None, game_x=None, face_expr=None, fc=None):
+def video_filter(layout, cam, ass, band=None, cam_side='right', src=None, game_x=None, face_expr=None, fc=None, crop_x=None):
     """Layout + burned-caption filter graph ending in [vo]. Reused by translate.py."""
     if layout == "fill":
         v = f"[0:v]scale=-2:{H},crop={W}:{H}[v]"
     elif layout == "blur":
         v = (f"[0:v]split[a][b];[a]scale=-2:{H},crop={W}:{H},boxblur=24:2,eq=brightness=-0.08[bg];"
-             f"[b]crop=iw*0.75:ih,scale={W}:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2-80[v]")
+             f"[b]crop=iw*0.75:ih{'' if crop_x is None else f':iw*{crop_x:.4f}:0'},scale={W}:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2-80[v]")
     elif layout == 'react':
         sw, sh = src
         if face_expr:  # tracked face crop (no cam frame)
@@ -418,7 +418,27 @@ def main():
             print(f"facecam: face-centred panel crop {fc}")
         except Exception as ex:
             print(f"facecam: face-centred crop not possible ({str(ex)[:60]}), using the cam box")
-    v = video_filter(layout, cam, ass, band=band, cam_side=side, src=src, game_x=gx, face_expr=face_expr, fc=fc)
+    blur_x = None
+    if layout == 'blur' and a.layout == 'blur':  # the blurred layout crops 12.5% off each side: a webcam on that edge must not be shown half (polish 1)
+        try:
+            import pick_rules as PR
+            cb = None
+            if cam == 'auto':
+                from facecam import find_cam
+                rr = find_cam(c['source'], s0, e0)
+                if rr.get('mode') in ('cam', 'face') and webcam_ok(rr)[0]:
+                    cb = [float(v) for v in rr['box']]
+                    if rr['mode'] == 'face' and cb[2] < 0.12:
+                        cx_, cw_ = cb[0] + cb[2] / 2, min(1.0, cb[2] * 2.6)
+                        cb = [min(max(0.0, cx_ - cw_ / 2), 1 - cw_), cb[1], cw_, cb[3]]
+            elif cam.count(':') == 3:
+                cb = [float(t) for t in cam.split(':')]
+            blur_x = PR.blur_crop_x(cb) if cb else None
+            if blur_x is not None:
+                print(f"blur: a webcam sits on the edge ({cb[0]:.2f}-{cb[0] + cb[2]:.2f}): the crop starts at {blur_x:.2f} so it is not cut in half")
+        except Exception as ex:
+            print(f"blur: webcam check skipped ({str(ex)[:60]})")
+    v = video_filter(layout, cam, ass, band=band, cam_side=side, src=src, game_x=gx, face_expr=face_expr, fc=fc, crop_x=blur_x)
     mp4 = out / f"clip_{a.pick}.mp4"
     dur = max(1.0, e0 - s0)  # a short fade-out (picture + sound) so the clip ends on purpose instead of looking like a random cut
     vmap = "[vo]"

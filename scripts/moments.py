@@ -20,11 +20,12 @@ try:
 except Exception:
     GTA_TOPIC = True
 GAME = re.compile(r"\b(gta|vice city|leonida|lucia|jason|mission|cops?|police|wanted|heist|cars?|truck|bike|motorcycle|helicopter|chopper|plane|jet|boat|gun|guns|shoot\w*|shot|crash\w*|drive|driving|driver|steal|stole|rob\w*|bank|store|gang|dealer|club|beach|gator|alligator|swamp|miami|wasted|busted|arrest\w*|explo\w*|rpg|tank|parachute|skydiv\w*|character|map|rockstar|graphics|npc|pedestrian|run|chase|fight|kill\w*|dead|die|died|boss|loot|weapon)\b", re.I)
-PROMO = re.compile(r"\b(giveaways?|raffle|promo code|use code|sponsor(ed)?|drops? (are|is) (on|enabled)|type in chat|enter (the|my)|link in)\b", re.I)
+PROMO = re.compile(r"\b(giveaways?|raffle|promo code|use code|sponsor(ed)?|drops? (are|is) (on|enabled)|type in chat|enter (the|my) (giveaway|raffle|contest|draw)|link in)\b", re.I)
 PRE = 3.0  # seconds of lead-in before the event
 STRONG = 4.0  # viral score a moment needs to be worth posting (voice, laughter, swearing, action, loudness, chat...); calibrated so mission chatter and cutscene dialogue stay under it. autorun's strict mode wants 5.0
 # strong reaction words only: common filler ("what", "wait", "bro", "yo", "nah", "run") also appears constantly in game cutscene dialogue and menus
 HYPE = re.compile(r"\b(no way|oh my god|oh my gosh|omg|let'?s go+|holy|insane|crazy|wtf|look at (this|that)|are you serious|what the (hell|fuck)|bro what|go go go)\b", re.I)
+import pick_rules as PR  # noqa: E402  (polish 1: capped z-scores, talk rule; the old logic is in backup_logic_2026-11-22)
 from textutil import SWEAR, chat_weight  # noqa: E402  (chat shock/laughter word weights, shared with live.py)
 
 
@@ -286,7 +287,7 @@ def main():
         print(f"job: {d}\nLANGUAGE {lang['language']} ({lang['p']}) is not in your language list: skipping this source\n0 candidates (0 strong)")
         return
     # signals
-    loud = smooth(np.clip(z(db - smooth(db, 30)), 0, None), 3)          # jumps above the local level
+    loud = smooth(PR.cap_z(z(db - smooth(db, 30))), 3)          # jumps above the local level
     hype = np.zeros(n)
     for w in words:
         if int(w["s"]) < n and (HYPE.search(w["w"]) or _xreact(w["w"], lang) == "hype"):
@@ -300,11 +301,11 @@ def main():
             heat[i0:i1] = h["value"]
     chat, react = chat_series(d, n, a.chat, info, a.start * 60)
     rate = smooth(react, 10); share = rate / (smooth(chat, 10) + 3)  # reactions per second, and their share of all messages
-    chatz = smooth(0.5 * np.clip(z(rate), 0, None) + 0.5 * np.clip(z(share), 0, None), 3)
+    chatz = smooth(0.5 * PR.cap_z(z(rate), True) + 0.5 * PR.cap_z(z(share), True), 3)
     w_heat = 2.0 if heat.any() else 0
     w_chat = 3.5 if chat.any() else 0          # chat reaction is the primary signal; sound only backs it up
     w_loud = 0.8 if chat.any() else 1.2        # without chat (no replay/live chat) fall back to loudness
-    motion = smooth(np.clip(z(smooth(motion_series(vid, d, n), 5)), 0, None), 3)
+    motion = smooth(PR.cap_z(z(smooth(motion_series(vid, d, n), 5))), 3)
     # listening: how the voice sounds, laughter, swearing (= real excitement), something unusual being said, speech speeding up
     try:
         voice = voice_series(wav, n)
@@ -325,13 +326,13 @@ def main():
         laugh = np.maximum(laugh, 0.35 * np.clip(laugh_audio(wav, n), 0, 2))
     except Exception as e:
         print(f"laughter detection unavailable ({str(e)[:60]})")
-    rate_z = smooth(np.clip(z(smooth(wps, 3)), 0, None), 2)
+    rate_z = smooth(PR.cap_z(z(smooth(wps, 3))), 2)
     speaking = np.zeros(n)
     for w in words:
         speaking[max(0, int(w["s"])):min(n, int(w["e"]) + 1)] = 1
     speaking = smooth(speaking, 3) > 0  # someone is talking (short pauses between words and sentences do not count as silence)
     # weights: what the voice does and what happens on screen matter most; fast talking alone (mission chatter) barely counts
-    score = (w_loud * loud + 0.4 * z(hype).clip(0) + 0.8 * motion + w_heat * z(heat).clip(0) + w_chat * chatz
+    score = (w_loud * loud + 0.4 * PR.cap_z(z(hype), True) + 0.8 * motion + w_heat * PR.cap_z(z(heat), True) + w_chat * chatz
              + 1.5 * voice + 0.8 * laugh + 0.8 * swear + 0.7 * novel + 0.15 * rate_z)
     # pick non-overlapping windows around peaks
     starts = [x["s"] for x in words]
@@ -386,6 +387,9 @@ def main():
             e0 = min(limit, ext + 0.4)
         if e0 - s0 < a.min:  # too short now: take the missing seconds from the build-up before the peak, not from the aftermath
             s0 = max(0, s0 - (a.min - (e0 - s0)))
+            mid = next((x for x in words if x["s"] < s0 < x["e"]), None)
+            if mid:
+                s0 = max(0, mid["s"] - 0.1)  # not in the middle of a word
             e0 = max(e0, min(dur, s0 + a.min))
         e0 = min(e0, s0 + a.max)
         try:
@@ -396,17 +400,21 @@ def main():
             pass
         if used[int(s0):int(e0)].any():
             continue
-        used[max(0, int(s0) - 12):int(e0) + 12] = True  # picks stay at least 12 s apart: no two clips of the same moment
         text = " ".join(x["w"] for x in words if s0 <= x["s"] < e0)
-        if len(TALK.findall(text)) >= 2:  # the streamer is talking to chat / about the stream, not reacting to something in the game
+        talk_hits = len(TALK.findall(text))
+        react = bool(voice[near].max() > 1.0 or laugh[near].max() > 0.5 or swear[near].max() > 0.5)  # a real reaction inside it
+        if PR.talk_blocks(talk_hits, react):  # the streamer is talking to chat / about the stream, not reacting to something in the game
             continue
         if PROMO.search(text):  # giveaway / sponsor talk
             continue
+        used[max(0, int(s0) - 12):int(e0) + 12] = True  # picks stay at least 12 s apart: no two clips of the same moment (set only once the moment is accepted: a rejected one must not block its neighbours)
         ctx = " ".join(x["w"] for x in words if s0 - 45 <= x["s"] < e0 + 45)  # speech around the moment
         hits = len(GAME.findall(ctx))
         bonus = (0.2 * min(hits, 3) - (0.8 if hits == 0 and len(ctx.split()) >= 25 else 0.0)) if GTA_TOPIC else 0.0  # the word bonus is written for GTA; other topics get none  # in the game = a little more, long non-game talk = a little less
-        agree = sum(1 for arr, th in ((chatz, 1.0), (loud, 1.0), (voice, 1.0), (heat, 0.5), (motion, 3.0)) if arr[near].max() > th)  # independent signals that fire together
+        agree = sum(1 for arr, th in ((chatz, 1.0), (heat, 0.5), (motion, 3.0)) if arr[near].max() > th)  # independent signals that fire together
+        agree += 1 if (loud[near].max() > 1.0 or voice[near].max() > 1.0) else 0  # loudness and an excited voice are the same sound: one signal
         agree += 1 if laugh[near].max() > 0.5 else 0
+        agree += 0 if talk_hits < 2 else -1  # a reaction that is mostly talking to chat counts for less
         final = float(score[p]) + bonus + min(1.05, 0.35 * max(0, agree - 1))  # one signal alone is easy to fool (a raid, a loud game sound): agreement is worth more
         why = []
         if agree >= 3: why.append(f"{agree} signals agree")

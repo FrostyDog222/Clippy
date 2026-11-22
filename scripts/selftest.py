@@ -101,7 +101,7 @@ def _judge_rules(json, tempfile):
     c = {"start": 10, "end": 40, "why": ["a"], "sig": {}, "text": "", "peak": 20, "ai": None}
     v = {"title": "xQc reacts", "id": "x"}
     good = autorun.judge(v, 6.0, tmp, 1, c, None)
-    assert good and abs(good["rank"] - (7.5 + 1.8 + 0.5)) < 0.01 and not good["weak"], good  # AI scores + energy + streamer-reacts bonus
+    assert good and abs(good["rank"] - (7.5 + 1.8 + 0.5 + 0.4)) < 0.01 and not good["weak"], good  # AI scores + energy + streamer-reacts bonus
     win["speaker"] = "game"  # game characters talking, the streamer silent: -2 and no bonus
     g = autorun.judge(v, 6.0, tmp, 1, c, None)
     assert g and abs((good["rank"] - g["rank"]) - 2.5) < 0.01, (good["rank"], g["rank"])
@@ -374,7 +374,7 @@ def test_scheduled_posting_and_mark_as_not_posted():
     tmp = Path(tempfile.mkdtemp()); (tmp / "review").mkdir()
     keep = (d.REVIEW, d.review_post, d.REVIEW_STATUS.copy(), d.threading.Thread)
     d.REVIEW = tmp / "review"; d.REVIEW_STATUS.clear()
-    now = dtm.datetime(2026, 11, 22, 18, 0)
+    now = dtm.datetime(2030, 11, 22, 18, 0)
     def clip(i, **extra):
         stem = f"17959990{i:02d}__clip_1"
         (d.REVIEW / f"{stem}.mp4").write_bytes(b"x"); (d.REVIEW / f"{stem}.json").write_text(json.dumps(extra)); return stem
@@ -431,10 +431,10 @@ def test_new_helpers_views_flags_slots_reason():
     finally:
         views.REVIEW, views.LOG = old
     # posting slots: respect the window, the gap and the daily limit (already-taken times count)
-    now = dtm.datetime(2026, 11, 22, 8, 0)
-    taken = [dtm.datetime(2026, 11, 22, 9, 0), dtm.datetime(2026, 11, 22, 11, 0)]
+    now = dtm.datetime(2030, 11, 22, 8, 0)
+    taken = [dtm.datetime(2030, 11, 22, 9, 0), dtm.datetime(2030, 11, 22, 11, 0)]
     sl = d.plan_slots(now, 5, 3, "09:00", "22:30", 120, taken)
-    assert len(sl) == 5 and sl[0] == dtm.datetime(2026, 11, 22, 13, 0) and sl[1].date() == dtm.date(2026, 11, 23), sl  # 1 slot left today (limit 3), then a new day
+    assert len(sl) == 5 and sl[0] == dtm.datetime(2030, 11, 22, 13, 0) and sl[1].date() == dtm.date(2030, 11, 23), sl  # 1 slot left today (limit 3), then a new day
     assert all(b - a >= dtm.timedelta(minutes=120) for a, b in zip(sl, sl[1:]) if a.date() == b.date())
     assert all(dtm.time(9, 0) <= x.time() <= dtm.time(22, 30) for x in sl)
     # spreading clips over days only takes the liked (thumbs-up) ones, best rank first
@@ -442,7 +442,7 @@ def test_new_helpers_views_flags_slots_reason():
     try:
         for i, (rk, rt) in enumerate([(5, 1), (9, 1), (8, 0), (7, -1)]):
             st = f"17960000{i:02d}__clip_1"; (tmp2 / f"{st}.mp4").write_bytes(b"x"); (tmp2 / f"{st}.json").write_text(json.dumps({"rank": rk, "rating": rt}))
-        assert d.review_autoschedule("private", now=dtm.datetime(2026, 11, 22, 10, 0)) == 2
+        assert d.review_autoschedule("private", now=dtm.datetime(2030, 11, 22, 10, 0)) == 2
         sch = {f.stem[8:10]: json.loads(f.read_text()).get("scheduled") for f in tmp2.glob("*.json")}
         assert sch["01"]["at"] < sch["00"]["at"] and sch["02"] is None and sch["03"] is None, sch
     finally:
@@ -613,7 +613,7 @@ def test_selected_clips_can_be_scheduled():
     try:
         for i, rt in enumerate([0, 0, 1]):
             st = f"17960000{i:02d}__clip_1"; (d.REVIEW / f"{st}.mp4").write_bytes(b"x"); (d.REVIEW / f"{st}.json").write_text(json.dumps({"rank": 5 + i, "rating": rt}))
-        n = d.review_autoschedule("private", now=dtm.datetime(2026, 11, 22, 10, 0), ids={"1796000000__clip_1"})
+        n = d.review_autoschedule("private", now=dtm.datetime(2030, 11, 22, 10, 0), ids={"1796000000__clip_1"})
         sch = {f.stem[8:10]: json.loads(f.read_text()).get("scheduled") for f in d.REVIEW.glob("*.json")}
         assert n == 1 and sch["00"] and not sch["01"] and not sch["02"], sch                # only the selected clip, liked or not
     finally:
@@ -948,6 +948,81 @@ def test_old_clips_leave_ready_to_post_by_themselves():
         assert (tmp / (new + ".mp4")).exists() and d.review_expiry(json.loads((tmp / (new + ".json")).read_text()), new, 1) == int(new.split("__")[0]) + 3 * 86400
     finally:
         d.REVIEW, d.read_cfg, d.R = keep, kc, kr
+
+
+def test_polish1_rules_cap_smooth_and_keep_good_clips():
+    import sys
+    import numpy as np
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import pick_rules as PR
+    z = np.array([0.5, 3.0, 12.0, -2.0])
+    assert PR.cap_z(z).tolist() == [0.5, 3.0, 6.0, 0.0] and PR.cap_z(z, sparse=True).tolist() == [0.5, 3.0, 3.5, 0.0]      # one event can no longer be worth +12
+    assert PR.viral_penalty(5.0) == 0 and PR.viral_penalty(6.2) == 0 and PR.viral_penalty(4.0) == 2.0 and PR.viral_penalty(3.0) == 2.0
+    assert PR.viral_penalty(4.99) < 0.05 and PR.viral_penalty(4.5) == 1.0                                              # no cliff at 5.0
+    assert PR.viral_penalty(4.9) < PR.viral_penalty(4.5) < PR.viral_penalty(4.1)                                       # smooth and monotonic
+    assert PR.talk_blocks(2, False) and not PR.talk_blocks(2, True) and not PR.talk_blocks(1, False)                    # "chat, did you see that?! no way, chat!" with a real reaction is kept
+    assert PR.no_ai_baseline(5.0) == 6.0 and PR.no_ai_baseline(9.0) == 10.0
+    assert PR.total_penalty([(2.0, "a"), (1.5, "b"), (2.0, "c")]) == 4.0 and PR.total_penalty([(1.0, "a")]) == 1.0
+    import moments as M
+    assert not M.PROMO.search("we enter the bank now") and M.PROMO.search("enter the giveaway in chat") and M.PROMO.search("use code clip")
+
+
+def test_unjudged_waiting_clips_are_not_learned_as_meh():
+    import sys, tempfile, json, time
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import learn
+    tmp = Path(tempfile.mkdtemp()); (tmp / "review").mkdir(); keep = learn.R; learn.R = tmp
+    try:
+        now = int(time.time())
+        for name, extra in ((f"{now - 3600}__clip_1", {}), (f"{now - 5 * 86400}__clip_1", {}), (f"{now - 3600}__clip_2", {"reviewed": True})):
+            (tmp / "review" / (name + ".json")).write_text(json.dumps({"features": {"win": 5}, **extra}))
+        ids = {r["id"] for r in learn.load_all()}
+        assert f"{now - 3600}__clip_1" not in ids                         # made an hour ago, nobody looked at it yet
+        assert f"{now - 5 * 86400}__clip_1" in ids and f"{now - 3600}__clip_2" in ids   # old and ignored = meh; marked 😐 = meh
+    finally:
+        learn.R = keep
+
+
+def test_a_strong_spoken_bit_is_not_dragged_down_by_dull_frames():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import pick_rules as PR
+    # the alley clip: bit 7/10, frames 3/10, viral score 4.1, bonuses 1.58 (this rule is OFF in polish 2: switched on here only to test the arithmetic)
+    PR.FRAME_OVERRIDE = True
+    old = (7 + 3) / 2 + 0.3 * 4.1 + 1.58
+    new = PR.ai_base(7, 3, None, PR.frame_overridden({"speaker": "streamer"}), 4.1) + 0.3 * 4.1 + 1.58
+    assert round(old, 2) == 7.81 and round(new, 2) == 9.81
+    assert PR.ai_base(7, 3, None, PR.frame_overridden({"speaker": "game"}), 4.1) == 5.0           # the game's own dialogue does not override the frame look
+    assert PR.ai_base(7, 3, None, False, 4.1) == 5.0 and PR.ai_base(None, None, None, False, 5.0) == 6.0
+    assert PR.ai_base(7, 3, 8, True, 4.1) == 7.5                                                  # the other AI read still counts
+    PR.FRAME_OVERRIDE = False
+    assert not PR.frame_overridden({"speaker": "streamer"})                                         # polish 2: the ratings say frames matter, so the override is off
+
+
+def test_a_leaning_streamer_keeps_the_webcam_and_the_blur_crop_spares_the_webcam():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import pick_rules as PR
+    assert PR.keep_webcam(0.92, 0.0) and PR.keep_webcam(0.25, 0.83)                       # CaseOh leans out of frame: faces found at the same place with a looser check
+    assert not PR.keep_webcam(0.17, 0.58) and not PR.keep_webcam(0.08, 0.9) and not PR.keep_webcam(0.0, 1.0)   # a scene switch / no real webcam still falls back to blur
+    assert PR.blur_crop_x((0.0, 0.2164, 0.1993, 0.1993)) == 0.2113                          # webcam straddling the left cut: the crop starts after it
+    assert PR.blur_crop_x((0.80, 0.1, 0.2, 0.2)) == 0.038 and PR.blur_crop_x((0.0, 0.1, 0.10, 0.2)) is None   # on the right edge: end before it; fully outside the crop: unchanged
+    assert PR.blur_crop_x((0.3, 0.1, 0.2, 0.2)) is None                                    # a cam in the middle is left alone
+    import cut
+    base = cut.video_filter("blur", "auto", "x.ass")
+    assert "crop=iw*0.75:ih,scale=" in base                                                  # no webcam found: the old filter, unchanged
+    assert "crop=iw*0.75:ih:iw*0.2110:0," in cut.video_filter("blur", "auto", "x.ass", crop_x=0.211)
+
+
+def test_polish2_picture_length_and_streamer_names():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import pick_rules as PR, learn
+    assert PR.frame_adjust(9) == 0.8 and PR.frame_adjust(8) == 0.4 and PR.frame_adjust(7) == 0 and PR.frame_adjust(5) == -0.8 and PR.frame_adjust(3) == -0.8 and PR.frame_adjust(None) == 0
+    assert PR.length_adjust(24) == 0.4 and PR.length_adjust(20) == 0.4 and PR.length_adjust(30) == 0.4 and PR.length_adjust(15) == -0.5 and PR.length_adjust(35) == -0.2 and PR.length_adjust(19) == 0 and PR.length_adjust(52) == 0
+    assert PR.norm_channel("ohnePixel") == PR.norm_channel("ohnepixel") == "ohnepixel" and PR.norm_channel("caseoh_") == PR.norm_channel("Caseoh_ VODS") == "caseoh"
+    assert PR.norm_channel("xQc") == "xqc" and PR.norm_channel("Asmongold TV") == "asmongold" and PR.norm_channel("tv") == "tv"
+    assert learn.channel_of({"features": {"channel": "Caseoh_ VODS"}}) == learn.channel_of({"creator": "caseoh_"})
 
 
 def test_titles_survive_bad_on_video_text():

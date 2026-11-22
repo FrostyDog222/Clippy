@@ -17,6 +17,7 @@ for _s in (sys.stdout, sys.stderr):
 R = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(R)); sys.path.insert(0, str(R / "scripts"))
 import tick  # noqa: E402
+import pick_rules as PR  # noqa: E402  (polish 1: the small rules of the clip-deciding logic)
 from common import youtube_cookie_args, ytdlp_json  # noqa: E402
 CUSTOM = None  # a run on one link the user chose: {"clips": n, "start": minute or None, "len": minutes or None} (see _custom)
 
@@ -299,6 +300,15 @@ def face_coverage(clip):
     return sum(1 for d in det if d) / max(1, len(det))
 
 
+def face_coverage_lenient(clip):
+    """Like face_coverage, but with a lower detector score and only counting faces that sit at the SAME place in the panel (a webcam person leaning in and out of the frame)."""
+    import facecam
+    frames = facecam.sample_frames(clip, 0, None, 12)
+    tops = [f[: int(f.shape[0] * 720 / 1920)] for f in frames]
+    _, hits = facecam.stable_face(facecam.detect_faces(tops, score=0.3), len(tops))
+    return hits / max(1, len(tops))
+
+
 import contextlib, os, time  # noqa: E402
 
 
@@ -420,11 +430,11 @@ def _stage1(v, score, job, n, c, creator):
     strict = CFG.get("quality", "strict") == "strict"  # quality over quantity is ON unless the user switches it off
     # strict no longer means "reject on any single weak signal" (that left runs empty): soft problems are penalties on one rank, only clear junk is rejected
     pen = []
-    if strict and score < 5.0 - slack():  # the viral score (voice, laughter, swearing, action, chat...): 5+ = clearly strong
-        if score < 4.0 - slack():
-            log(f"  viral score {score} is far below the bar, skipping"); return None
-        if not v.get("twitch"):  # a clip viewers made is already a moment people picked: the energy score does not need to prove it
-            pen.append((2.0, f"viral score {score} is under 5"))  # your ratings: clips with an energy score of 5+ were liked far more often (8 of 9 liked vs 2 of 6 disliked), so a low one now costs 2 points
+    if strict and score < 4.0 - slack():  # the viral score (voice, laughter, swearing, action, chat...): 5+ = clearly strong
+        log(f"  viral score {score} is far below the bar, skipping"); return None
+    vp = PR.viral_penalty(score)  # polish 1: a smooth penalty (0 at 5, 2 at 4) instead of a 2-point cliff at 5.0; it keeps its size when you lower the minimum score, so strong clips still rank above weak ones
+    if strict and vp > 0 and not v.get("twitch"):  # a clip viewers made is already a moment people picked: the energy score does not need to prove it
+        pen.append((vp, f"viral score {score} is under 5")  )  # your ratings: clips with an energy score of 5+ were liked far more often (8 of 9 liked vs 2 of 6 disliked), so a low one now costs 2 points
     if COMPILATION.search(v.get("title", "")):  # a compilation is already edited (changing webcam layout, cuts mid-moment) and is the "reused content" risk
         pen.append((1.5, "source is a compilation"))
     try:  # licensed music in the clip (Content ID / takedown risk): the transcript shows it as music notes or [Music]
@@ -488,14 +498,14 @@ def _stage1(v, score, job, n, c, creator):
 def _est(st):
     """Rank of a stage-1 state (before the frame check): what decides which moments get the more expensive frame look first."""
     ai = [x for x in (st["win_score"], st["c"].get("ai")) if x is not None]
-    return (sum(ai) / len(ai) if ai else 5.0) - sum(p for p, _ in st["pen"]) + st["score"] * 0.3 + st["bonus"]
+    return (sum(ai) / len(ai) if ai else PR.no_ai_baseline(st["score"])) - PR.total_penalty(st["pen"]) + st["score"] * 0.3 + st["bonus"]
 
 
 def _stage2(v, job, st):
     """Stage 2: the AI frame look / visual check, snapping to a scene cut, the final rank. Returns None or what the cut needs."""
     pen, c, cut_range, win, bonus, win_score, score, strict = (st[k] for k in ("pen", "c", "cut_range", "win", "bonus", "win_score", "score", "strict"))
     bonus_notes = st.get("bonus_notes", [])
-    scene, res_score = None, None
+    scene, res_score, frame_pen, frame_over = None, None, False, False
     if CFG.get("title_writer") in ("claude", "api"):  # an AI looks at 3 frames of the moment: skips non-GTA / nothing-happening moments, tells the title writer what happens
         import ai_check
         try:
@@ -509,11 +519,11 @@ def _stage2(v, job, st):
         except Exception as e:
             res = {"ok": None, "reason": str(e)[:80], "what": ""}
         if res["ok"] is False and res.get("gta") and (win_score or 0) >= 7 and not ai_check.MUNDANE.search(res.get("what", "")):  # frames are a weak judge: a clearly strong bit (7+) is not vetoed by a quiet moment in them
-            log(f"  AI frame check rated {res.get('score')}/10 but the bit scored {win_score:g}/10: keeping it"); res["ok"] = True
+            log(f"  AI frame check rated {res.get('score')}/10 but the bit scored {win_score:g}/10: keeping it"); res["ok"] = True; frame_over = PR.frame_overridden(win)  # polish 1: then the frames do not drag the rank down either
         if res["ok"] is False and (CFG.get("ai_check") or strict):
             if not res.get("gta") or (res.get("score") or 0) <= 3:  # clearly not the topic / nothing happening: out
                 log(f"  AI frame check: skipping ({res['reason']})"); return None
-            pen.append((2.0, f"frame check: {res['reason'][:60]}"))  # the 3 frames are a weak judge: a penalty, not a veto
+            pen.append((2.0, f"frame check: {res['reason'][:60]}")); frame_pen = True  # the 3 frames are a weak judge: a penalty, not a veto (polish 1: then they are not ALSO averaged into the AI score)
         if res.get("cutscene"):  # a cutscene is only a clip when the streamer reacts to it (a funny reaction), never the scripted dialogue alone
             sg = c.get("sig") or {}
             reacts = bool(win and win["speaker"] != "game") or sg.get("voice", 0) > 1 or sg.get("laugh", 0) > 0.5 or sg.get("swear", 0) > 0.5 or bool(v.get("twitch"))
@@ -548,16 +558,21 @@ def _stage2(v, job, st):
             log(f"  the source already has subtitles (in {caps_share:.0%} of the sampled frames): Clippy's own captions are skipped")
     except Exception:
         pass
-    ai = [x for x in (win_score, res_score, c.get("ai")) if x is not None]
-    adj = (sum(ai) / len(ai) if ai else 5.0) - sum(p for p, _ in pen)
-    rank = adj + score * 0.3 + bonus  # AI judgement first (minus penalties, plus a bonus when the streamer reacts), the local viral score second
+    adj = PR.ai_base(win_score, res_score, c.get("ai"), frame_pen or frame_over, score) - PR.total_penalty(pen)  # polish 1: no AI read = the viral score as the base (was a fixed 5); stacked penalties are capped
+    dur0 = max(1.0, float(c.get("end", 0)) - float(c.get("start", 0)))
+    fa, la = PR.frame_adjust(res_score), PR.length_adjust(dur0)  # polish 2: the picture score and a 20-30 s length prior, both measured on the user's ratings
+    rank = adj + score * 0.3 + bonus + fa + la  # AI judgement first (minus penalties, plus a bonus when the streamer reacts), the local viral score second
     if pen:
         log("  penalties: " + "; ".join(f"-{p:g} {w}" for p, w in pen) + f" -> rank {rank:.1f}")
     dur_ = max(1.0, float(c.get("end", 0)) - float(c.get("start", 0)))
-    feat = {"win": win_score, "frames": res_score, "ai": c.get("ai"), "score": score, "penalty": round(sum(p for p, _ in pen), 2), "sig": c.get("sig"), "why": c.get("why"),
+    feat = {"win": win_score, "frames": res_score, "ai": c.get("ai"), "score": score, "penalty": round(sum(p for p, _ in pen), 2), "logic": 2, "sig": c.get("sig"), "why": c.get("why"),
             "seconds": round(dur_, 1), "twitch": 1 if v.get("twitch") else 0, "live": 1 if ORIGIN == "live" else 0, "nonen": _nonen(job), "views_log": round(__import__("math").log10((v.get("views") or 0) + 1), 2),
             "wps": round(len(str(c.get("text") or "").split()) / dur_, 2), "channel": v.get("channel"), "source_captions": caps_share,  # more for the learning: length, source, popularity, speech speed, which streamer
             "notes": [f"-{p:g} {w}" for p, w in pen] + [f"+{p:g} {w}" for p, w in bonus_notes], "bit": (win or {}).get("why"), "scene": scene}  # notes/bit/scene: shown in the dashboard score tooltip
+    if fa:
+        feat["notes"].append(f"{fa:+g} the picture scored {res_score:g}/10")
+    if la:
+        feat["notes"].append(f"{la:+g} clip length {dur_:.0f} s")
     try:  # after enough 👍/👎 ratings: a small nudge (at most +-1) toward moments that look like the ones the user liked (scripts/learn.py)
         import learn
         nudge = learn.adjust(feat)
@@ -653,8 +668,13 @@ def try_candidate(v, score, job, n, c, creator, dry, memo=None, review_only=Fals
             except Exception:
                 pass
             cov = face_coverage(cp)
-            if cov < MIN_FACE_COVERAGE:  # the fixed webcam crop shows something else (game, blank scene) for part of the clip
-                log(f"  the webcam panel shows a face in only {cov:.0%} of the clip (no webcam or scene switches): using the blurred layout instead"); continue
+            if cov < MIN_FACE_COVERAGE:  # the fixed webcam crop shows something else (game, blank scene) for part of the clip, or the streamer leans out of the frame
+                lenient = face_coverage_lenient(cp) if cov >= PR.FACE_SEEN else 0.0
+                if PR.keep_webcam(cov, lenient):
+                    log(f"  the streamer moves in and out of the webcam ({cov:.0%} sure faces, {lenient:.0%} at the same place with a looser check): keeping the webcam layout")
+                    cov = lenient
+                else:
+                    log(f"  the webcam panel shows a face in only {cov:.0%} of the clip (no webcam or scene switches): using the blurred layout instead"); continue
             log(f"  webcam shows a face in {cov:.0%} of the clip")
         if ok:
             clip = cp; log(f"  cut ok ({layout})"); break
