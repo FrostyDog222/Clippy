@@ -1175,6 +1175,41 @@ def test_code_compiles_on_python_3_11_when_available():
     assert not bad, bad                                                                                           # setup.bat accepts Python 3.10+: newer-only syntax must not slip in
 
 
+def test_post_buttons_can_post_to_one_platform_or_both():
+    import sys, tempfile, json, subprocess
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    tmp = Path(tempfile.mkdtemp()); (tmp / "review").mkdir()
+    keep = (d.R, d.REVIEW, d.read_cfg, subprocess.run)
+    d.R = tmp; d.REVIEW = tmp / "review"; d.read_cfg = lambda: {"post_youtube": True, "post_tiktok": True}
+    calls = []
+    class Res:
+        stdout = json.dumps({"tiktok": "posted"}); stderr = ""
+    subprocess.run = lambda args, **k: calls.append(args) or Res()
+    try:
+        def go(stem, only=None, posted=None):
+            (d.REVIEW / (stem + ".mp4")).write_bytes(b"v")
+            side = d.REVIEW / (stem + ".posted.json"); side.unlink(missing_ok=True)
+            if posted:
+                side.write_text(json.dumps(posted))
+            calls.clear(); d.review_post(stem, "private", only)
+            return [x for x in calls if "post_clip.py" in " ".join(map(str, x))]
+        c = go("1__clip_1", "tiktok")
+        assert c and c[0][-2:] == ["--only", "tiktok"]                                              # "Post on TikTok" posts to TikTok alone
+        c = go("1__clip_2", "youtube")
+        assert c and c[0][-2:] == ["--only", "youtube"]
+        c = go("1__clip_3")
+        assert c and "--only" not in c[0]                                                          # both platforms: no restriction
+        c = go("1__clip_4", "youtube", {"youtube": "http://y"})
+        assert not c and d.REVIEW_STATUS["1__clip_4"]["state"] == "done"                           # already on YouTube: nothing is uploaded again
+        c = go("1__clip_5", None, {"youtube": "http://y"})
+        assert c and c[0][-2:] == ["--only", "tiktok"]                                              # both-button after a YouTube post: only the missing one goes out
+    finally:
+        d.R, d.REVIEW, d.read_cfg, subprocess.run = keep
+    html = (Path(__file__).resolve().parent.parent / "dashboard.html").read_text(encoding="utf-8")
+    assert "Post on TikTok + YouTube" in html and "Post on YouTube" in html and "Already posted on " in html and "rvLabel" not in html
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

@@ -27,10 +27,18 @@ You choose a topic (a game or anything: "GTA 6", "Minecraft", "Elden Ring"), a l
 
 Every finished clip waits in the dashboard with a preview (hover to play it muted). In three tidy rows you can:
 
-- **Post** (private or public) or **Schedule** it with a dark calendar and a 12-hour or 24-hour time picker (your choice in Settings). Scheduled clips are posted while Clippy is running; a missed time is never posted late by surprise.
+- **Post** (private or public) with one of three buttons: **Post on TikTok**, **Post on YouTube** or **Post on TikTok + YouTube**. Or **Schedule** it with a dark calendar and a 12-hour or 24-hour time picker (your choice in Settings). Scheduled clips are posted while Clippy is running; a missed time is never posted late by surprise.
 - **Edit text**, ask for a **New joke**, **Trim** it (the original is kept), **Crop** it again with another layout, or press **Rebuild without captions** (also for videos that already have their own subtitles). A clip marked "language unsure" was made without captions and waits for you.
 - **Rate it** 👍 / 😐 / 👎 (with a reason for 👎), or **Remove** it. "Mark as not posted" lets you post a changed version again.
 - Work fast with **keyboard shortcuts** (J/K, U, N, D, X, S, E, Del), **select several clips** at once, and **spread your liked clips over the next days** while respecting your daily limit and posting window.
+
+### How the post buttons and the filter work
+
+Each clip remembers where it was already posted, and the buttons follow that:
+
+- A platform's button is **greyed out once the clip is posted there**. Hover over it and it says "Already posted on TikTok" (or YouTube), so you can never upload the same clip twice by mistake. A platform you switched off in **Settings, Where to post** is greyed out too, and the hover text says so.
+- **Post on TikTok + YouTube** posts to both. If the clip is already on one platform it is greyed out too, and the hover text says which one; use the single button for the platform that is still missing. If one platform fails (for example YouTube's daily upload limit), the other still goes out, and you can post the missing one later with its own button.
+- Over the clip list, the **filter** puts every clip in exactly one group, so the lists never overlap: **Not posted anywhere yet**, **Scheduled**, **Posted on both YouTube and TikTok**, **Posted on YouTube only** and **Posted on TikTok only**. Choose "All clips" to see everything again. If you switch a platform off in Settings, "both" means every platform that is still switched on.
 
 ## Review your clips: it is how Clippy learns
 
