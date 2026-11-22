@@ -24,6 +24,8 @@ PROMO = re.compile(r"\b(giveaways?|raffle|promo code|use code|sponsor(ed)?|drops
 PRE = 3.0  # seconds of lead-in before the event
 STRONG = 4.0  # viral score a moment needs to be worth posting (voice, laughter, swearing, action, loudness, chat...); calibrated so mission chatter and cutscene dialogue stay under it. autorun's strict mode wants 5.0
 # strong reaction words only: common filler ("what", "wait", "bro", "yo", "nah", "run") also appears constantly in game cutscene dialogue and menus
+DRAMA = re.compile(r"^(liar|lying|lied|disrespect\w*|pathetic|clown\w*|toxic|snake|fraud|apologi[sz]e\w*|apology|unfollow\w*|unsub\w*|cancel+ed|exposed|beef|drama|"
+                   r"idiot\w*|stupid|loser\w*|delusional|embarrassing|ridiculous|stfu|blame\w*|ban+ed|kicked)[,.!?]*$", re.I)  # polish 6: an argument, a call-out, rage
 HYPE = re.compile(r"\b(no way|oh my god|oh my gosh|omg|let'?s go+|holy|insane|crazy|wtf|look at (this|that)|are you serious|what the (hell|fuck)|bro what|go go go)\b", re.I)
 import pick_rules as PR  # noqa: E402  (polish 1: capped z-scores, talk rule; the old logic is in backup_logic_2026-11-22)
 from textutil import SWEAR, chat_weight  # noqa: E402  (chat shock/laughter word weights, shared with live.py)
@@ -311,7 +313,7 @@ def main():
         voice = voice_series(wav, n)
     except Exception as e:
         print(f"voice analysis unavailable ({str(e)[:60]})"); voice = np.zeros(n)
-    laugh, swear, novel, wps = np.zeros(n), np.zeros(n), np.zeros(n), np.zeros(n)
+    laugh, swear, novel, wps, drama = np.zeros(n), np.zeros(n), np.zeros(n), np.zeros(n), np.zeros(n)
     for w in words:
         t = int(w["s"])
         if t >= n:
@@ -321,7 +323,9 @@ def main():
         if LAUGH.match(w["w"].strip()) or xr == "laugh": laugh[t] += 1
         if SWEAR.search(w["w"]) or xr == "swear": swear[t] += 1
         if NOVEL.search(w["w"]): novel[t] += 1
+        if DRAMA.match(w["w"].strip(" \"'")): drama[t] += 1
     laugh, swear, novel = np.clip(smooth(laugh, 4) * 2, 0, 3), np.clip(smooth(swear, 4) * 3, 0, 2), np.clip(smooth(novel, 5) * 3, 0, 2)  # sparse events: raw strength, not z-scores
+    drama = np.clip(smooth(drama, 8) * 3, 0, 2) * (voice > 1.0)  # argument words only count when the voice is raised (calm "that's wrong" is not drama)
     try:  # laughing (and rapid excited bursts) heard in the sound, since the transcript rarely writes "haha": a light extra, never decisive on its own
         laugh = np.maximum(laugh, 0.35 * np.clip(laugh_audio(wav, n), 0, 2))
     except Exception as e:
@@ -333,7 +337,7 @@ def main():
     speaking = smooth(speaking, 3) > 0  # someone is talking (short pauses between words and sentences do not count as silence)
     # weights: what the voice does and what happens on screen matter most; fast talking alone (mission chatter) barely counts
     score = (w_loud * loud + 0.4 * PR.cap_z(z(hype), True) + 0.8 * motion + w_heat * PR.cap_z(z(heat), True) + w_chat * chatz
-             + 1.5 * voice + 0.8 * laugh + 0.8 * swear + 0.7 * novel + 0.15 * rate_z)
+             + 1.5 * voice + 0.8 * laugh + 0.8 * swear + 0.7 * novel + 0.15 * rate_z + 0.8 * drama)
     # pick non-overlapping windows around peaks
     starts = [x["s"] for x in words]
     picks, used = [], np.zeros(n, bool)
@@ -345,7 +349,7 @@ def main():
         # need a real audio spike, a chat spike or a most-replayed peak near this second
         near = slice(max(0, p - 4), p + 5)
         if not (chatz[near].max() > 1.0 or loud[near].max() > 1.0 or voice[near].max() > 1.0 or laugh[near].max() > 0.5
-                or swear[near].max() > 0.5 or (w_heat and heat[near].max() > 0.5)):
+                or swear[near].max() > 0.5 or drama[near].max() > 0.5 or (w_heat and heat[near].max() > 0.5)):
             continue  # nothing exciting near this second (no chat spike, loud jump, excited voice, laughter, swearing or replay peak)
         # start right before the event instead of 15 s of build-up (the first seconds decide whether people stay): the event is the first loud
         # second in the 12 s before the peak (sound is instant, chat reacts 5-10 s later), the clip opens PRE seconds ahead of it
@@ -427,10 +431,11 @@ def main():
         if laugh[near].max() > 0.5: why.append("laughter")
         if swear[near].max() > 0.5: why.append("swearing")
         if novel[near].max() > 0.5: why.append("something unusual")
+        if drama[near].max() > 0.5: why.append("an argument or call-out")
         if hits: why.append("in the game")
         picks.append({"n": len(picks) + 1, "start": round(s0, 2), "end": round(e0, 2), "peak": int(p),
                       "score": round(final, 2), "strong": bool(final >= STRONG), "why": why or ["overall energy"], "text": text[:400],
-                      "sig": {k: round(float(v[near].max()), 2) for k, v in (("loud", loud), ("hype", hype), ("motion", motion), ("voice", voice), ("laugh", laugh), ("swear", swear), ("novel", novel), ("rate", rate_z), ("chat", chatz))} | {"game": hits, "bonus": round(bonus, 2)}})
+                      "sig": {k: round(float(v[near].max()), 2) for k, v in (("loud", loud), ("hype", hype), ("motion", motion), ("voice", voice), ("laugh", laugh), ("swear", swear), ("novel", novel), ("rate", rate_z), ("chat", chatz), ("drama", drama))} | {"game": hits, "bonus": round(bonus, 2)}})
     picks.sort(key=lambda x: x["start"])
     for i, x in enumerate(picks, 1):
         x["n"] = i

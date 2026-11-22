@@ -208,7 +208,8 @@ def test_removed_clips_teach_meh():
         for st in (meh, rated, posted, nosig):
             remove(st)
         rows = [json.loads(x) for x in (tmp / "ratings.jsonl").read_text().splitlines()]
-        assert [(r["id"], r["rating"], r.get("removed")) for r in rows] == [(meh, 0, True), (rated, 1, True)], rows  # the unrated, unposted clip (meh) and the rated one (its rating is written down again); not the posted / signal-less ones
+        assert [(r["id"], r["rating"], r.get("removed")) for r in rows] == [(meh, 0, True), (rated, 1, True), (posted, 1, True)], rows  # meh, the rated one (written down again), and the posted unrated one as a soft like; not the one without signals
+        assert rows[2]["w"] == 0.5
     finally:
         srv.shutdown(); d.R, d.REVIEW = keep
 
@@ -702,7 +703,8 @@ def test_live_has_its_own_minimum_score():
     old = d.read_cfg()
     assert d.clean({**old, "min_score_live": 4.3}, old)["min_score_live"] == 4.5 and d.clean({**old, "min_score_live": 99}, old)["min_score_live"] == 10.0
     import learn
-    assert "live" in learn.KEYS
+    src = (Path(__file__).resolve().parent / "autorun.py").read_text(encoding="utf-8")
+    assert '"live": 1 if ORIGIN == "live" else 0' in src  # every clip still saves whether it came from a live stream (polish 4 slimmed the model, not what is saved)
 
 
 def test_live_log_clear_never_leaves_nul_bytes():
@@ -1054,6 +1056,123 @@ def test_edge_strip_search_finds_nothing_in_an_empty_frame_and_never_crashes():
     frames = [np.zeros((360, 640, 3), np.uint8) for _ in range(6)]
     face, hits = facecam.edge_strip_face(frames)
     assert face is None and hits == 0                                   # no face in a black frame: nothing is invented (polish 3: small / dark webcams are searched on the enlarged side strips)
+
+
+def test_humour_needs_a_quoted_punchline_and_the_short_reason_list():
+    import sys, json
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent)); sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import pick_rules as PR, ai_check, learn
+    assert PR.quote_found("so I just ran over grandma and she said you are fired honestly", "she said you are fired")
+    assert not PR.quote_found("hello there friend how are you", "a totally invented punchline") and not PR.quote_found("anything", "")
+    assert PR.kind_cap(8.0, "funny", False, "") == 5.0 and PR.kind_cap(8.0, "funny", True, "") == 8.0 and PR.kind_cap(8.0, "", False, "") == 8.0      # nothing to show = at most 5; a model that ignores the field changes nothing
+    assert PR.kind_cap(8.0, "interesting", False, "he lands the plane") == 8.0 and PR.kind_cap(8.0, "neither", False, "") == 4.0
+    assert PR.kind_cap(8.0, "funny", False, "stick drift while following the hooker") == 8.0 and PR.kind_cap(8.0, "funny", False, "", True) == 8.0   # situational comedy needs no punchline: a described situation or an audible reaction is evidence
+    assert PR.kind_cap(8.0, "funny", False, "n/a") == 5.0 and PR.kind_cap(8.0, "funny", False, "none") == 5.0                      # a placeholder is not evidence
+    assert PR.norm_kind("None") == "neither" and PR.norm_kind("n/a") == "neither" and PR.norm_kind("funny|drama|shock") == "" and PR.norm_kind("a drama moment") == "drama" and PR.norm_kind("hype") == ""
+    assert PR.quote_found("он сказал что это невозможно сделать сегодня", "это невозможно сделать")                                 # quotes in other scripts can be verified too
+    assert PR.kind_cap(8.0, "drama", False, "they argue about the heist") == 8.0 and PR.kind_cap(8.0, "skill", False, "", True) == 8.0 and PR.kind_cap(8.0, "shock", False, "") == 5.0 and PR.kind_cap(8.0, "neither", True, "x y") == 4.0 and PR.kind_cap(8.0, "", False) == 8.0
+    lo, hi = PR.wilson(20, 30)
+    assert 0.48 < lo < 0.49 and 0.80 < hi < 0.81 and PR.wilson(0, 3)[1] < 0.6 and PR.wilson(0, 0) == (0.0, 1.0)             # small groups give wide ranges
+    # the AI judge: a window whose quoted "funniest line" is not in the transcript is capped at 5, a real one keeps its score
+    groups = ["oh no the car", "is on fire and", "he screams why would you park it there"]
+    w = [{"w": x, "s": 100 + 3 * gi + 0.3 * i, "e": 100.25 + 3 * gi + 0.3 * i} for gi, g in enumerate(groups) for i, x in enumerate(g.split())]   # three bursts of speech with pauses between them
+    keep = ai_check.ai_title.complete_cfg
+    try:
+        cases = [("funny", "he screams why would you park it there", "", 8.0, True),        # a real quoted punchline keeps its score
+                 ("funny", "an invented line that is nowhere", "", 5.0, False),              # a joke with no quotable punchline: capped
+                 ("funny", "an invented line that is nowhere", "a car burns and he reacts", 8.0, False),   # ... unless something interesting is stated
+                 ("interesting", "", "a skill moment: he lands the plane on the roof", 8.0, False),      # interesting is never marked down for not being funny
+                 ("interesting", "", "", 5.0, False), ("neither", "", "", 4.0, False)]
+        for kind, quote, inter, expect, has_funny in cases:
+            ai_check.ai_title.complete_cfg = lambda *a, **k: json.dumps({"start": 100, "end": 108.5, "score": 8.0, "kind": kind, "funny_line": quote, "interesting": inter, "payoff": True, "standalone": True, "speaker": "streamer", "risky": False, "why": "x"})
+            r = ai_check.refine_window({"title_writer": "api"}, w, 100, 108.5, 40, 3)
+            assert r and r["score"] == expect and bool(r["funny"]) == has_funny, (kind, quote, inter, r)
+        r = ai_check.refine_window({"title_writer": "api"}, w, 100, 108.5, 40, 3, viewer_picked=True)
+        assert r and r["score"] == 8.0                                                                                   # a clip viewers saved on Twitch is not capped for lacking a quoted line
+        seen = {}
+        ai_check.ai_title.complete_cfg = lambda cfg, prompt, **k: seen.update(p=prompt) or json.dumps({"start": 100, "end": 108.5, "score": 6.0, "standalone": True, "speaker": "streamer", "risky": False, "why": "x"})
+        r = ai_check.refine_window({"title_writer": "api"}, w, 100, 108.5, 40, 3, examples=["LIKED: a panic", "DISLIKED: a crash | the viewer said: notfunny"])
+        assert r and r["score"] == 6.0 and "LIKED: a panic" in seen["p"] and '"quote"' in seen["p"] and "DRAMA" in seen["p"] and "SKILL" in seen["p"]   # the examples and every kind of moment reach the prompt; a model that ignores "kind" keeps its score
+        ai_check.ai_title.complete_cfg = lambda *a, **k: json.dumps({"start": 100, "end": 108.5, "score": 8.5, "kind": "drama", "quote": "why would you park it there", "what": "he snaps at his friend", "standalone": True, "speaker": "streamer", "risky": False, "why": "x"})
+        r = ai_check.refine_window({"title_writer": "api"}, w, 100, 108.5, 40, 3)
+        assert r and r["score"] == 8.5 and r["kind"] == "drama" and r["quote"]                                                      # drama is as clip-worthy as a joke
+    finally:
+        ai_check.ai_title.complete_cfg = keep
+    import dashboard as d
+    assert all(k in d.WHY for k in ("notfunny", "noaction", "slow", "nocontext", "cutoff", "crop", "offtopic"))
+    html = (Path(__file__).resolve().parent.parent / "dashboard.html").read_text(encoding="utf-8")
+    assert "Add your own reason" not in html and "const WHY=[['notfunny'" in html and html.split("const WHY=[")[1].split("];")[0].count("],[") == 6   # the short list: 7 reasons, no custom one
+
+
+def test_drama_words_are_recognised_only_as_whole_words():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import moments as M
+    assert all(M.DRAMA.match(w) for w in ("liar!", "Disrespectful,", "pathetic.", "STFU", "apologize", "unfollowed", "banned"))
+    assert not any(M.DRAMA.match(w) for w in ("lyingly-not", "shutter", "wrongway", "hello", "beefy"))      # whole words only
+
+
+def test_learning_uses_posts_kinds_and_reasons():
+    import sys, tempfile, json, time, random
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import learn
+    tmp = Path(tempfile.mkdtemp()); (tmp / "review").mkdir(); keep_r, keep_w = learn.R, learn.W_FILE
+    learn.R = tmp; learn.W_FILE = tmp / "w.json"
+    try:
+        old = int(time.time()) - 5 * 86400
+        (tmp / "review" / f"{old}__clip_1.json").write_text(json.dumps({"features": {"win": 7}}))
+        (tmp / "review" / f"{old}__clip_1.posted.json").write_text(json.dumps({"tiktok": "posted"}))
+        (tmp / "review" / f"{old}__clip_2.json").write_text(json.dumps({"features": {"win": 6}}))
+        rows = {r["id"]: r for r in learn.load_all()}
+        assert rows[f"{old}__clip_1"]["rating"] == 1 and rows[f"{old}__clip_1"]["w"] == learn.POSTED_WEIGHT        # posted without a rating = a soft like
+        assert rows[f"{old}__clip_2"]["rating"] == 0                                                              # not posted, not rated = meh
+        random.seed(3)
+        mk = lambda i, good, kind: {"id": str(i), "rating": 1 if good else -1, "features": {"win": random.uniform(5, 8), "frames": random.uniform(5, 8), "kind": kind, "channel": "x"}}
+        rows2 = [mk(i, True, "drama") for i in range(8)] + [mk(100 + i, False, "funny") for i in range(8)] + [mk(200 + i, i % 2 == 0, "skill") for i in range(8)]
+        for r in rows2[8:12]:
+            r["reasons"] = ["notfunny", "slow"]
+        m = learn.fit(rows2)
+        assert m and m["kinds"]["drama"] > 0 > m["kinds"]["funny"]                                                 # it learns which kinds of moments the user likes
+        f = {"win": 6.5, "frames": 6.5, "channel": "x"}
+        assert learn.adjust({**f, "kind": "drama"}, m) > learn.adjust({**f, "kind": "funny"}, m)
+        rc = dict(learn.reason_counts(rows2))
+        assert rc == {"notfunny": 4, "slow": 4}
+    finally:
+        learn.R, learn.W_FILE = keep_r, keep_w; learn._model.update(t=0.0, m=None)
+
+
+def test_ratings_log_keeps_every_reason_and_posted_clips_stay_soft_likes():
+    import sys, tempfile, json, time
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent)); sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import dashboard as d, learn
+    tmp = Path(tempfile.mkdtemp()); (tmp / "review").mkdir()
+    keep = (d.R, d.REVIEW, d.learn_refit, learn.R, learn.W_FILE)
+    d.R = tmp; d.REVIEW = tmp / "review"; d.learn_refit = lambda: None; learn.R = tmp; learn.W_FILE = tmp / "w.json"
+    try:
+        st = f"{int(time.time()) - 5 * 86400}__clip_1"
+        d.log_rating(st, {"features": {"win": 5}, "reason": "notfunny", "reasons": ["notfunny", "slow"]}, -1)
+        assert dict(learn.reason_counts(learn.load_all())) == {"notfunny": 1, "slow": 1}                       # every ticked reason reaches the learning, not just the first
+        st2 = f"{int(time.time()) - 5 * 86400}__clip_2"
+        (tmp / "review" / (st2 + ".json")).write_text(json.dumps({"features": {"win": 7}}))
+        (tmp / "review" / (st2 + ".posted.json")).write_text(json.dumps({"tiktok": "posted"}))
+        (tmp / "review" / (st2 + ".mp4")).write_bytes(b"v")
+        d.review_remove(st2, auto=True)
+        rows = {r["id"]: r for r in learn.load_all()}
+        assert rows[st2]["rating"] == 1 and rows[st2]["w"] == learn.POSTED_WEIGHT                                 # removed (even by the auto clean-up): still a soft like
+    finally:
+        d.R, d.REVIEW, d.learn_refit, learn.R, learn.W_FILE = keep
+
+
+def test_code_compiles_on_python_3_11_when_available():
+    import subprocess, shutil
+    if not shutil.which("py"):
+        return
+    root = Path(__file__).resolve().parent.parent
+    if subprocess.run(["py", "-3.11", "-c", "pass"], capture_output=True).returncode != 0:
+        return  # no 3.11 on this PC: nothing to check
+    files = [root / "dashboard.py", root / "tick.py"] + sorted((root / "scripts").glob("*.py"))
+    bad = [f.name for f in files if subprocess.run(["py", "-3.11", "-m", "py_compile", str(f)], capture_output=True).returncode != 0]
+    assert not bad, bad                                                                                           # setup.bat accepts Python 3.10+: newer-only syntax must not slip in
 
 
 def test_titles_survive_bad_on_video_text():

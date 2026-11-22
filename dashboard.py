@@ -31,7 +31,7 @@ def read_cfg():
             if secretstore.exists("title_api_key") and not secretstore.exists("key_p1"):
                 secretstore.save("key_p1", secretstore.load("title_api_key"))
     c.setdefault("live_watch", False); c.setdefault("live_max_streams", 3); c.setdefault("ai_check", False); c.setdefault("quality", "strict")
-    c.setdefault("twitch_clips", "first"); c.setdefault("twitch_period", "week"); c.setdefault("twitch_per_streamer", 6); c.setdefault("twitch_priority", False)  # Twitch clips (made by viewers): where to look, how far back, how many per streamer
+    c.setdefault("twitch_clips", "first"); c.setdefault("twitch_period", "week"); c.setdefault("twitch_per_streamer", 6); c.setdefault("twitch_priority", False); c.setdefault("ai_examples", False)  # Twitch clips (made by viewers): where to look, how far back, how many per streamer
     return c
 
 
@@ -598,6 +598,7 @@ def clean(new, old):
     except (TypeError, ValueError):
         out["twitch_per_streamer"] = 6
     out["twitch_priority"] = bool(new.get("twitch_priority", False))
+    out["ai_examples"] = bool(new.get("ai_examples", False))
     out["use_trending_fallback"] = bool(new["use_trending_fallback"])
     out["trending_any"] = bool(new.get("trending_any", False))
     out["time_format"] = new.get("time_format") if new.get("time_format") in ("12", "24") else "12"  # 12-hour (US) or 24-hour (Europe) times and dates
@@ -783,6 +784,9 @@ def review_remove(stem, auto=False):
             log_rating(stem, d, d.get("rating") or 0, removed=True); learn_refit()  # you rated it (👍 / 😐 / 👎): that rating is written down again before the clip goes, so Clippy keeps learning from it for good
         elif d.get("features") and not d.get("rating") and not posted and not auto:  # an automatic clean-up says nothing about the clip: no "meh" is learned from it
             log_rating(stem, d, 0, removed=True); learn_refit()
+        elif d.get("features") and not d.get("rating") and posted:  # you posted it and never rated it: it stays a soft like after the clip is gone
+            import learn
+            log_rating(stem, d, 1, removed=True, w=learn.POSTED_WEIGHT); learn_refit()
     except Exception:
         pass
     (REVIEW / (stem + ".json")).unlink(missing_ok=True)  # the info file first: the clip leaves the list at once, even if the video is still locked
@@ -877,7 +881,7 @@ def review_rejoke(stem):
     text = clip_words(d)
     if not text:
         raise ValueError("The words of this clip are no longer on this PC, so no new joke can be written. Use Edit text instead.")
-    ai = ai_title.write(cfg, text, d.get("source_channel") or "", d.get("source_title") or "")
+    ai = ai_title.write(cfg, text, d.get("source_channel") or "", d.get("source_title") or "", kind=(d.get("features") or {}).get("kind"))
     if not ai:
         raise ValueError("The AI title writer did not answer (key, sign-in or limit). Try again in a moment.")
     line = ai["tiktok_line"][:85].strip()
@@ -888,11 +892,11 @@ def review_rejoke(stem):
     return line
 
 
-def log_rating(stem, d, rating, removed=False):
+def log_rating(stem, d, rating, removed=False, w=None):
     """One line in ratings.jsonl (local only): the clip's rating (+1 stood out good, -1 stood out bad, 0 meh) with the signals behind it. The log outlives the clip."""
     with open(R / "ratings.jsonl", "a", encoding="utf-8") as fh:
         fh.write(json.dumps({"id": stem, "rating": rating, "ts": dt.datetime.now().isoformat(timespec="seconds"), "rank": d.get("rank"), "features": d.get("features"),
-                             "seconds": d.get("seconds"), "creator": d.get("source_channel") or d.get("creator"), **({"reason": d["reason"]} if d.get("reason") else {}), **({"removed": True} if removed else {})}, ensure_ascii=False) + chr(10))
+                             "seconds": d.get("seconds"), "creator": d.get("source_channel") or d.get("creator"), **({"reason": d["reason"]} if d.get("reason") else {}), **({"reasons": d["reasons"]} if d.get("reasons") else {}), **({"w": w} if w is not None else {}), **({"removed": True} if removed else {})}, ensure_ascii=False) + chr(10))
 
 
 _LEARN = {"t": 0.0, "v": None}
@@ -1521,7 +1525,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 d.pop("reasons", None)
                 if body["rating"] == -1:
                     rs = body.get("reasons") if isinstance(body.get("reasons"), list) else ([body["reason"]] if body.get("reason") else [])
-                    rs = [str(x).strip()[:40] for x in rs if isinstance(x, (str,)) and str(x).strip()][:8]  # known reasons, or the user's own words
+                    rs = [str(x).strip()[:40] for x in rs if isinstance(x, (str,)) and str(x).strip() in WHY][:8]  # only the reasons the list offers (the short list, plus the older ones that clips may still carry)
                     if rs:
                         d["reasons"] = rs; d["reason"] = next((x for x in rs if x in WHY), rs[0])
                 cf.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")

@@ -6,6 +6,8 @@
  * no_ai_baseline: without any AI read the rank started from a fixed 5 and could never reach the default bar of 7; the viral score is the base instead.
  * total_penalty: stacked penalties are capped.
 """
+import re
+
 import numpy as np
 
 CAP_DENSE, CAP_SPARSE = 6.0, 3.5
@@ -106,3 +108,81 @@ def norm_channel(name):
         if k.endswith(suf) and len(k) > len(suf) + 2:
             k = k[: -len(suf)]
     return k
+
+
+# ---- polish 5: humour (2026-11-22) -------------------------------------------------------------------------------------------------------------------------------
+def quote_found(text, quote, need=0.7):
+    """Is the 'funniest line' the AI quoted really in the transcript of the window? (A made-up quote is no evidence of a joke.) Fuzzy: at least `need` of the quote must appear as one run."""
+    import re
+    from difflib import SequenceMatcher
+    norm = lambda s: re.sub(r"[^\w' ]+", " ", str(s).lower()).split()  # \w keeps Cyrillic, Arabic, CJK... letters
+    q, t = " ".join(norm(quote)), " ".join(norm(text))
+    if len(q.split()) < 2 or not t:
+        return False
+    m = SequenceMatcher(None, t, q, autojunk=False).find_longest_match(0, len(t), 0, len(q))
+    return m.size >= need * len(q)
+
+
+# polish 6: the kinds of moments people clip. One list, used by the AI judge, the whole-video scan, the titles and the learning card.
+KINDS = {
+    "funny": "a joke, irony, an absurd or awkward moment, a mishap or glitch, physical or situational comedy, a reaction that lands (no punchline needed)",
+    "drama": "an argument, beef, a call-out or roast, rage, a heated or awkward exchange between people (streamer, chat, guests, other players)",
+    "shock": "something unexpected: a twist, a jump scare, a shocking reveal or event, a stunned reaction",
+    "skill": "an impressive play, a clutch, a perfect stunt, a big win",
+    "fail": "an epic fail, a costly mistake, bad luck, getting destroyed",
+    "emotional": "genuine emotion: a wholesome, heartfelt, proud or sad moment, a big celebration",
+    "interesting": "a notable statement, a hot take, news, a reveal or a fact people would share",
+}
+KIND_NAMES = list(KINDS) + ["neither"]
+
+
+def kinds_text():
+    return "; ".join(f"{k.upper()}: {v}" for k, v in KINDS.items())
+
+
+PLACEHOLDERS = {"", "n/a", "na", "none", "nothing", "empty", "no", "-", "null", "unknown", "nothing remarkable", "not applicable"}
+NO_KIND = {"none", "no", "n/a", "na", "nothing", "null", "not clip-worthy", "not worth it"}
+
+
+def norm_kind(kind):
+    """The AI's kind, made safe: one of KIND_NAMES, "neither" for a 'none / n/a', or "" (= unknown: no cap at all). A copied template ("funny|drama|...") is unknown."""
+    k = str(kind or "").strip().lower()
+    if k in KIND_NAMES:
+        return k
+    if not k or "|" in k:
+        return ""
+    if k in NO_KIND:
+        return "neither"
+    for name in KIND_NAMES:  # "drama moment", "a fail" ...
+        if re.search(r"\b" + name + r"\b", k):
+            return name
+    return ""
+
+
+def real_what(what):
+    """A description that says something: at least 2 words and not a placeholder such as 'n/a' or 'none'."""
+    w = str(what or "").strip().lower().strip(".!")
+    return w not in PLACEHOLDERS and len(w.split()) >= 2
+
+
+def kind_cap(score, kind, quote_found, what="", reacts=False):
+    """Any kind of moment can score high when the AI can show it: a quoted line that is really in the transcript, a short description of what happens, or an audible reaction.
+    A claim with nothing to show is capped at 5; 'neither' at 4; kind "" (a model that ignores the field) changes nothing."""
+    s = float(score)
+    kind = str(kind or "").strip().lower()
+    if not kind:
+        return s
+    if kind == "neither":
+        return min(s, 4.0)
+    return s if (quote_found or real_what(what) or reacts) else min(s, 5.0)
+
+
+def wilson(k, n, z=1.96):
+    """Wilson interval for k liked out of n rated: (low, high) in 0..1. A bare percentage from a handful of clips says almost nothing."""
+    if n <= 0:
+        return (0.0, 1.0)
+    p = k / n
+    c = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / c
+    half = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / c
+    return (max(0.0, centre - half), min(1.0, centre + half))

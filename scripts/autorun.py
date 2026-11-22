@@ -463,7 +463,14 @@ def _stage1(v, score, job, n, c, creator):
         try:
             import ai_check
             allw = json.loads((job / "transcript.json").read_text(encoding="utf-8"))
-            win = ai_check.refine_window(CFG, allw, c["start"], c["end"], LIMITS[1], min(12, LIMITS[0]))
+            ex = None
+            if CFG.get("ai_examples"):  # Settings: the viewer's own rated clips (short descriptions, never transcripts) are shown to the AI as examples of his taste
+                try:
+                    import learn
+                    ex = learn.examples() or None
+                except Exception:
+                    ex = None
+            win = ai_check.refine_window(CFG, allw, c["start"], c["end"], LIMITS[1], min(12, LIMITS[0]), examples=ex, viewer_picked=bool(v.get("twitch")), reacts=bool((c.get("sig") or {}).get("laugh", 0) > 0.3 or (c.get("sig") or {}).get("voice", 0) > 1.0 or (c.get("sig") or {}).get("swear", 0) > 0.3))
         except Exception as e:
             win = None; log(f"  AI bit finder unavailable ({str(e)[:60]})")
         if not win and strict and CFG.get("title_writer") == "api":  # nothing real judged this moment (no AI answer): the local score alone is not enough
@@ -474,7 +481,7 @@ def _stage1(v, score, job, n, c, creator):
         if win:
             ws, we = win["start"], win["end"]
             log(f"  AI bit finder: {c['start']:.0f}-{c['end']:.0f}s -> {ws:.0f}-{we:.0f}s ({we - ws:.0f}s) score {win['score']:g}/10, speaker {win['speaker']}, "
-                f"standalone {win['standalone']}{', risky (flag only)' if win['risky'] else ''}: {win['why']}")
+                f"standalone {win['standalone']}{', risky (flag only)' if win['risky'] else ''}: {win['why']}" + (f" | {win.get('kind') or 'kind ?'}: " + (f"\"{win['quote'][:70]}\"" if win.get("quote") else (win.get("what") or "nothing to show")[:70])))
             if strict:
                 if win["score"] < 4.5 - slack():
                     if v.get("twitch") and (v.get("views") or 0) >= 50000:  # a clip that many viewers picked is not thrown away over the speech alone: a penalty, it still has to rank well
@@ -561,6 +568,12 @@ def _stage2(v, job, st):
     adj = PR.ai_base(win_score, res_score, c.get("ai"), frame_pen or frame_over, score) - PR.total_penalty(pen)  # polish 1: no AI read = the viral score as the base (was a fixed 5); stacked penalties are capped
     dur0 = max(1.0, float(c.get("end", 0)) - float(c.get("start", 0)))
     fa, la = PR.frame_adjust(res_score), PR.length_adjust(dur0)  # polish 2: the picture score and a 20-30 s length prior, both measured on the user's ratings
+    try:  # the learned model uses the same signals: as it gains trust these built-in priors fade (no double counting), like the voice / swearing boost
+        import learn
+        _f = 1.0 - learn.confidence()
+    except Exception:
+        _f = 1.0
+    fa, la = round(fa * _f, 2), round(la * _f, 2)
     rank = adj + score * 0.3 + bonus + fa + la  # AI judgement first (minus penalties, plus a bonus when the streamer reacts), the local viral score second
     if pen:
         log("  penalties: " + "; ".join(f"-{p:g} {w}" for p, w in pen) + f" -> rank {rank:.1f}")
@@ -568,7 +581,7 @@ def _stage2(v, job, st):
     feat = {"win": win_score, "frames": res_score, "ai": c.get("ai"), "score": score, "penalty": round(sum(p for p, _ in pen), 2), "logic": 2, "sig": c.get("sig"), "why": c.get("why"),
             "seconds": round(dur_, 1), "twitch": 1 if v.get("twitch") else 0, "live": 1 if ORIGIN == "live" else 0, "nonen": _nonen(job), "views_log": round(__import__("math").log10((v.get("views") or 0) + 1), 2),
             "wps": round(len(str(c.get("text") or "").split()) / dur_, 2), "channel": v.get("channel"), "source_captions": caps_share,  # more for the learning: length, source, popularity, speech speed, which streamer
-            "notes": [f"-{p:g} {w}" for p, w in pen] + [f"+{p:g} {w}" for p, w in bonus_notes], "bit": (win or {}).get("why"), "scene": scene}  # notes/bit/scene: shown in the dashboard score tooltip
+            "notes": [f"-{p:g} {w}" for p, w in pen] + [f"+{p:g} {w}" for p, w in bonus_notes], "bit": (win or {}).get("why"), "kind": (win or {}).get("kind"), "quote": (win or {}).get("quote"), "what": (win or {}).get("what"), "funny": (win or {}).get("funny") or (win or {}).get("funny_event"), "interesting": (win or {}).get("interesting"), "scene": scene}  # notes/bit/scene: shown in the dashboard score tooltip
     if fa:
         feat["notes"].append(f"{fa:+g} the picture scored {res_score:g}/10")
     if la:
@@ -641,7 +654,7 @@ def try_candidate(v, score, job, n, c, creator, dry, memo=None, review_only=Fals
     blurb = ""
     if CFG.get("title_writer") in ("claude", "api"):  # titles only: Claude CLI or the user own API; any problem -> keep the quote titles above
         words = json.loads((job / "transcript.json").read_text(encoding="utf-8"))
-        ai = ai_title.write(CFG, " ".join(w["w"] for w in words if c["start"] <= w["s"] < c["end"]), name, v["title"], scene, CHAT_HINT)
+        ai = ai_title.write(CFG, " ".join(w["w"] for w in words if c["start"] <= w["s"] < c["end"]), name, v["title"], scene, CHAT_HINT, kind=((jd or {}).get("feat") or {}).get("kind"))
         if ai:
             hook, seam, blurb = ai["youtube_title"], ai["on_video"], ai["tiktok_line"]
             log(f"  AI titles: on-video '{seam}' | YouTube '{hook}' | description '{blurb}'")

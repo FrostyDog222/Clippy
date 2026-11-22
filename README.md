@@ -39,7 +39,7 @@ Clippy is not trained on anyone else's taste. It learns **yours**, from the clip
 | You press | What it tells Clippy |
 |---|---|
 | 👍 | "This one stood out, find more like it." The strongest signal. |
-| 👎 | "This one stood out as bad, avoid this." Also a strong signal. You can tick why (boring, not funny, wrong crop, bad sound, nudity and more) and add reasons of your own; Clippy understands words like crop, sound, boring or slow in them. |
+| 👎 | "This one stood out as bad, avoid this." Also a strong signal. You can tick why from a short list that teaches Clippy something it can act on: not funny, nothing happens, too slow, no context, bad start or end, bad crop or webcam, off topic. |
 | 😐 | "I looked at it, it is fine either way." A light signal; it also tells Clippy that the clip is no longer waiting for you. |
 | nothing | Almost no information. A clip you never rate teaches Clippy very little. |
 
@@ -88,6 +88,14 @@ Clippy does not require an AI provider. AI integration is optional, and users ca
 ## Twitch clips (made by viewers)
 
 Clips that viewers save on Twitch are usually the funniest or most interesting moments, and they are quick to process. Clippy looks at them first. In Settings, Streamers, **Twitch clips**, you can choose how far back to look (last week, last month or all time), how many clips to consider per streamer, whether to use **only** Twitch clips (no YouTube videos), and a checkmark to **prioritize viewer-made Twitch clips**: when it is on, the most viewed Twitch clips of your topic (any streamer) are looked at before any YouTube video; when it is off, everything runs in the normal order.
+
+## What Clippy looks for
+
+People clip many kinds of moments, and Clippy treats them all as clip-worthy: **funny** (a joke, irony, an awkward moment, a mishap or glitch, no punchline needed), **drama** (an argument, beef, a call-out, rage), **shock** (a twist, a jump scare, a shocking reveal), **skill** (an impressive play or clutch), **fail** (an epic fail, a costly mistake), **emotional** (a wholesome, proud or sad moment, a big celebration) and **interesting** (a hot take, news, a reveal). The AI names the kind of every moment and must show it: the key line quoted from the transcript, a short description of what happens, or an audible reaction; a moment with nothing to show scores low. The moment finder also listens for the words of an argument when the voice is raised. Titles follow the kind: a drama or emotional clip gets a sharp or curious title, not a joke. The learning card shows how often you liked each kind once there are a few of them.
+
+## How Clippy judges humour
+
+The AI that reads each moment is told to be a hard judge, and a moment can be worth watching in two ways. **Funny:** it scores high when the AI can show what is funny: a **quoted punchline** (checked against the transcript), a described **funny situation** (a mishap, a glitch or physical comedy needs no punchline, like a controller drifting while he follows someone), or an **audible reaction** (laughing, swearing, an excited voice), with a setup and a payoff. **Interesting:** something surprising, tense, impressive, revealing or remarkable is said or happens, and the AI must say what it is. An interesting moment is never marked down just because it is not funny. A bit that is neither, chaos or crashes with no point, or a funny claim with no punchline and nothing remarkable, scores low. Clips that viewers saved on Twitch are not held to the quote rule, because viewers only save a moment when something happened. Scores use one decimal and the whole range, so average clips no longer all get the same number. In **Settings**, next to "Who writes the titles", an optional switch shows the AI a few examples of **your** taste: short descriptions of clips you liked and disliked, the funny line of the liked ones and your reasons for the disliked ones. It is off by default, and only those short descriptions (never a transcript) are sent to your AI provider. The learning card also shows how often you liked each kind of clip, with a range, because a percentage from a few clips says very little.
 
 ## Videos or live streams?
 
