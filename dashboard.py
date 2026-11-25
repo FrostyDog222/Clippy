@@ -1306,7 +1306,7 @@ def sched_loop():
 
 def review_post(stem, mode="private", only=None, again=False):
     """Post one review clip (in a thread): only to the platforms that are switched on and not done yet (again=True: a deliberate repost, also to the ones that are done). One upload at a time (same lock file as autorun / live)."""
-    st = REVIEW_STATUS[stem] = {"state": "posting", "msg": "Waiting for the upload slot..."}
+    st = REVIEW_STATUS[stem] = {"state": "posting", "msg": "Waiting for the upload slot...", "only": only}  # `only`: which button started it (the card marks just that one "Posting...")
     lock = R / "post.lock"
     try:
         end = time.time() + 1800
