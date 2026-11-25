@@ -273,10 +273,10 @@ def checks():
                       sc.exists() and "netguard" in sc.read_text(encoding="utf-8", errors="ignore") and read_cfg().get("network_guard", "enforce") == "enforce"))
     except Exception:
         pass
-    try:  # the headless-browser test (a real sign-in check done once): TikTok accepts a hidden browser, YouTube Studio does not
+    try:  # the headless-browser test (a real sign-in check done once): TikTok accepts a hidden browser; YouTube Studio does not
         hc = json.loads((R / "headless_check.json").read_text(encoding="utf-8"))
         extra.append(("Headless browser (no window), TikTok: works, but not used (both sites share one browser)", bool(hc.get("tiktok"))))
-        extra.append(("Headless browser (no window), YouTube: NOT supported, YouTube refuses it, so uploads use a normal window placed off-screen and wait while a full-screen app is active", bool(hc.get("youtube"))))
+        extra.append(("YouTube refuses a hidden (headless) browser, so uploads use a background window that never takes the focus (nothing to fix)", True))
     except Exception:
         pass
     try:  # YouTube asked Clippy to "confirm you are not a bot": video downloads are paused for a while (see scripts/autorun.py)
