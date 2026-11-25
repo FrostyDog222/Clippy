@@ -7,7 +7,7 @@ campaigns.md lines understood: min_seconds: 15 / max_seconds: 60 / required_hash
 import argparse, re, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
-from common import ffprobe, load_json
+from common import ffprobe, load_json, tool
 
 BANNED = ["leak", "leaked build", "play early", "early access download", "free download", "crack", "piracy",
           "mod menu", "money glitch", "afk bot"]
@@ -41,6 +41,41 @@ def banned_in(text):
     return [b for b in BANNED if b in low]
 
 
+SILENCE_DB, SILENCE_MIN = -55, 2.0   # below -55 dB for 2 s or more counts as silence (a muted stream part is digital silence, about -90 dB)
+MAX_SILENT_RUN, MAX_SILENT_SHARE = 6.0, 0.25  # a clip is too quiet when one silent stretch lasts 6 s or more, or a quarter of it is silent
+
+
+def parse_silence(text, dur):
+    """The (total, longest) seconds of silence out of ffmpeg's silencedetect lines. A silence that runs to the end of the clip is counted up to `dur`."""
+    total = longest = 0.0
+    start = None
+    for line in text.splitlines():
+        m = re.search(r"silence_start: (-?[\d.]+)", line)
+        if m:
+            start = max(0.0, float(m.group(1))); continue
+        m = re.search(r"silence_end: ([\d.]+) \| silence_duration: ([\d.]+)", line)
+        if m:
+            d = float(m.group(2)); total += d; longest = max(longest, d); start = None
+    if start is not None and dur > start:  # still silent when the clip ends
+        d = dur - start; total += d; longest = max(longest, d)
+    return total, longest
+
+
+def silence_of(clip, dur):
+    """(total, longest) seconds of silence in a clip's sound. (0, 0) when it cannot be measured."""
+    import subprocess
+    try:
+        r = subprocess.run([tool("ffmpeg"), "-hide_banner", "-nostats", "-i", str(clip), "-vn", "-af", f"silencedetect=noise={SILENCE_DB}dB:d={SILENCE_MIN}", "-f", "null", "-"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300, creationflags=0x08000000 if sys.platform == "win32" else 0)
+        return parse_silence(r.stderr, dur)
+    except Exception:
+        return 0.0, 0.0
+
+
+def too_quiet(total, longest, dur):
+    return longest >= MAX_SILENT_RUN or (dur > 0 and total / dur >= MAX_SILENT_SHARE)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("clip"); ap.add_argument("--campaign"); ap.add_argument("--caption", default="")
@@ -67,6 +102,9 @@ def main():
     f = fps_of(v.get("r_frame_rate", "0/1")) if v else 0
     add("fps about 30", 29 <= f <= 31, f"{f:.2f}")
     add("has audio", au is not None)
+    if au is not None:  # sound that is silent for long stretches (a muted part of a stream): a Short nobody can hear is skipped
+        tot, run = silence_of(clip, dur)
+        add("not silent for long", not too_quiet(tot, run, dur), f"{tot:.0f}s silent in total, longest {run:.0f}s")
     add(f"duration {rules['min']:g}-{rules['max']:g}s" + ("" if have_campaign else " (default)"),
         rules["min"] <= dur <= rules["max"], f"{dur:.1f}s")
     hook = meta.get("hook", "")

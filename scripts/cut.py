@@ -231,13 +231,17 @@ def panel_crop(box, face, sw, sh, ph=int(H * 0.38), zoom=3.4):
     return ev(cw), ev(ch), ev(x0), ev(y0)
 
 
+CAM_CLEAN = "hqdn3d=2:1.5:3:3"      # light noise cleanup of the webcam picture before it is enlarged (webcams are grainy)
+CAM_SHARP = "unsharp=5:5:0.5:3:3:0.0"  # a little sharpening after the enlargement (picture only, no colour change)
+
+
 def video_filter(layout, cam, ass, band=None, cam_side='right', src=None, game_x=None, face_expr=None, fc=None, crop_x=None):
     """Layout + burned-caption filter graph ending in [vo]. Reused by translate.py."""
     if layout == "fill":
         v = f"[0:v]scale=-2:{H},crop={W}:{H}[v]"
     elif layout == "blur":
         v = (f"[0:v]split[a][b];[a]scale=-2:{H},crop={W}:{H},boxblur=24:2,eq=brightness=-0.08[bg];"
-             f"[b]crop=iw*0.75:ih{'' if crop_x is None else f':iw*{crop_x:.4f}:0'},scale={W}:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2-80[v]")
+             f"[b]crop=iw*0.75:ih{'' if crop_x is None else f':iw*{crop_x:.4f}:0'},scale={W}:-2:flags=lanczos[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2-80[v]")
     elif layout == 'react':
         sw, sh = src
         if face_expr:  # tracked face crop (no cam frame)
@@ -249,7 +253,7 @@ def video_filter(layout, cam, ass, band=None, cam_side='right', src=None, game_x
             top = f"crop={cw}:{chh}:{even(sw * x)}:{even(sh * y)}"
         gw = even(sw * GAME_H / sh) if sw * GAME_H / sh >= W else W
         gx = game_x if game_x is not None else ((gw - W) if cam_side == 'left' else 0)
-        v = (f"[0:v]split[a][b];[a]{top},scale={W}:{TOP}:force_original_aspect_ratio=increase,crop={W}:{TOP},setsar=1[cam];"
+        v = (f"[0:v]split[a][b];[a]{CAM_CLEAN},{top},scale={W}:{TOP}:force_original_aspect_ratio=increase:flags=lanczos,crop={W}:{TOP},{CAM_SHARP},setsar=1[cam];"
              f"[b]scale={gw}:{GAME_H},crop={W}:{GAME_H}:{even(gx)}:0,setsar=1[game];[cam][game]vstack[v]")
         if band:
             y0, bh, secs = band
@@ -257,13 +261,13 @@ def video_filter(layout, cam, ass, band=None, cam_side='right', src=None, game_x
             v = v[:-3] + f"[v0];[v0]drawbox=x=0:y={y0}:w=iw:h={bh}:color=white@1:t=fill{en}[v]"
     elif fc:  # facecam with a known face: a face-centred crop in the panel's own shape
         ph = int(H * 0.38)
-        v = (f"[0:v]split[a][b];[a]crop={fc[0]}:{fc[1]}:{fc[2]}:{fc[3]},scale={W}:{ph}:flags=lanczos,setsar=1[cam];"
+        v = (f"[0:v]split[a][b];[a]{CAM_CLEAN},crop={fc[0]}:{fc[1]}:{fc[2]}:{fc[3]},scale={W}:{ph}:flags=lanczos,{CAM_SHARP},setsar=1[cam];"
              f"[b]scale=-2:{H - ph},crop={W}:{H - ph}[game];[cam][game]vstack[v]")
     else:
         x, y, w, h = map(float, cam.split(":"))
         # as before: webcam zoomed on top, the whole game centred below. The webcam stays visible in the corner of the game part (no blur patch).
-        v = (f"[0:v]split[a][b];[a]crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},scale={W}:{int(H * 0.38)}:force_original_aspect_ratio=increase,"
-             f"crop={W}:{int(H * 0.38)}[cam];[b]scale=-2:{H - int(H * 0.38)},crop={W}:{H - int(H * 0.38)}[game];[cam][game]vstack[v]")
+        v = (f"[0:v]split[a][b];[a]{CAM_CLEAN},crop=iw*{w}:ih*{h}:iw*{x}:ih*{y},scale={W}:{int(H * 0.38)}:force_original_aspect_ratio=increase:flags=lanczos,"
+             f"crop={W}:{int(H * 0.38)},{CAM_SHARP}[cam];[b]scale=-2:{H - int(H * 0.38)},crop={W}:{H - int(H * 0.38)}[game];[cam][game]vstack[v]")
     sub = str(ass).replace("\\", "/").replace(":", "\\:")
     # pad+crop guarantees exactly WxH even if a layout's pieces round to 1-2 px short/long (facecam gave 1080x1918)
     return v + f";[v]pad={W}:{H}:0:0:black,crop={W}:{H}:0:0,fps=30,subtitles='{sub}'[vo]"
@@ -446,7 +450,7 @@ def main():
         v = v.rstrip() + f";[vo]fade=t=out:st={dur - 0.3:.2f}:d=0.3[vf]"; vmap = "[vf]"
     run([tool("ffmpeg"), "-y", "-v", "error", "-ss", f"{s0:.2f}", "-to", f"{e0:.2f}", "-i", c["source"],
          "-filter_complex", v, "-map", vmap, "-map", "0:a?", "-af", f"loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=out:st={dur - 0.35:.2f}:d=0.35",
-         "-c:v", "libx264", "-preset", "slow", "-crf", "17", "-maxrate", "6M", "-bufsize", "12M", "-profile:v", "high", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+         "-c:v", "libx264", "-preset", "slow", "-crf", "17", "-maxrate", "10M", "-bufsize", "20M", "-profile:v", "high", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
          "-ar", "48000", "-movflags", "+faststart", str(mp4)])
     info = c.get("info", {})
     save_json(out / f"clip_{a.pick}.json", {"file": str(mp4), "start": s0, "end": e0, "layout": layout, "hook": a.hook or a.title, "title": a.title, "cam": cam,

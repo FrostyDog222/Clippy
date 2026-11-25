@@ -535,6 +535,7 @@ lastPerf=P;renderPerf()}
 $('log').textContent=d.log||'(empty)';prog(p,run,d.run_stale&&!d.live,d.live)}
 
 function schedLine(x){if(x.scheduled){const d=new Date(x.scheduled.at);return '&#9200; Scheduled for <b>'+fmtD(d,1)+'</b> ('+(x.scheduled.mode==='public'?'Public':'Private')+') &bull; <a href="#" class="lnk" data-id="'+x.id+'" onclick="schedCancel(this.dataset.id);return false">Cancel</a>'}
+if(x.sched_failed){return '&#9888; The scheduled post ('+fmtD(new Date(x.sched_failed.at))+') failed: '+esc(x.sched_failed.msg||'unknown error')+' Post it again or schedule a new time.'}
 if(x.sched_missed){const d=new Date(x.sched_missed);return '&#9888; The scheduled time ('+fmtD(d)+') passed while Clippy was closed, so it was not posted. Schedule it again or post it now.'}return ''}
 function localDT(ms){const d=new Date(ms-new Date().getTimezoneOffset()*60000);return d.toISOString().slice(0,16)}
 function schedClose(){const o=$('schedov');if(o)o.remove()}
@@ -546,7 +547,7 @@ o.innerHTML='<div class="schedbd" onclick="schedClose()"></div><div class="sched
 +'<div class="tl"><b style="font-size:16px">Post this clip later</b></div><div class="schedgrid"><div class="f"><span>Date and time</span><div id="rvdp_'+id+'"></div><input type="hidden" id="rvsd_'+id+'"></div><div class="schedside">'
 +'<label class="f"><span>Post as</span><select id="rvsm_'+id+'"><option value="private"'+(cur==='private'?' selected':'')+'>Private (YouTube) / Only me (TikTok)</option><option value="public"'+(cur==='public'?' selected':'')+'>Public (YouTube) / Everyone (TikTok)</option></select></label>'
 +'<div class="btns"><button class="btn pri" onclick="schedSave(&quot;'+id+'&quot;)">Schedule it</button><button class="btn" onclick="schedClose()">Close</button></div>'
-+'<div class="hint">Clippy posts it at that time even with this browser tab closed, as long as Clippy is still running in the background and the PC is awake (not after Quit dashboard, sleep, shutdown or restart). If the time passes while Clippy is not running, it is not posted late by itself (you will see a note). Platforms may still refuse an upload, for example at a daily limit.</div></div></div></div>';
++'<div class="hint">Clippy posts it at that time even with this browser tab closed, as long as the PC is on and you are signed in to Windows (a hidden Windows task starts Clippy for it; not during sleep or shutdown). If the time passes while the PC is off, it is not posted late by itself and the clip shows a note. If the upload fails (for example a daily limit), the clip shows the reason here, and Windows pop-ups tell you if they are on in Settings.</div></div></div></div>';
 document.body.appendChild(o);dpInit(id,next)}
 async function schedSave(id){const v=$('rvsd_'+id).value;if(!v){toast('Pick a date and time',1);return}
 const r=await fetch('/api/review/schedule',{method:'POST',body:JSON.stringify({id,at:v,mode:$('rvsm_'+id).value})});if(!r.ok){toast(await r.text(),1);return}toast('Scheduled for '+v.replace('T',' ')+'. '+SCHED_NOTE);schedClose();load()}

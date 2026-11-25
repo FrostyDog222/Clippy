@@ -1282,6 +1282,26 @@ def test_scheduled_posts_have_a_windows_task_only_while_something_is_scheduled()
         d.REVIEW = keep
 
 
+def test_clips_that_are_silent_for_long_stretches_fail_the_check():
+    import sys, subprocess, tempfile
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import check
+    out = "[silencedetect @ 0x1] silence_start: 0\n[silencedetect @ 0x1] silence_end: 27.1 | silence_duration: 27.1\n"
+    tot, run = check.parse_silence(out, 60)
+    assert round(tot) == 27 and round(run) == 27 and check.too_quiet(tot, run, 60)            # the muted CaseOh start
+    assert check.parse_silence("[x] silence_start: 50\n", 60) == (10.0, 10.0)                 # silent until the end
+    short = "[x] silence_start: 5\n[x] silence_end: 8 | silence_duration: 3\n"
+    assert not check.too_quiet(*check.parse_silence(short, 60), 60)                            # a 3 s pause is fine
+    try:
+        from common import tool
+        f = Path(tempfile.mkdtemp()) / "t.wav"
+        subprocess.run([tool("ffmpeg"), "-y", "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono:d=8", "-f", "lavfi", "-i", "sine=f=440:d=4", "-filter_complex", "[0][1]concat=n=2:v=0:a=1", str(f)], check=True)
+    except Exception:
+        return  # (no ffmpeg here: the parsing checks above are enough)
+    tot, run = check.silence_of(f, 12)
+    assert 7 <= run <= 8.5 and check.too_quiet(tot, run, 12)                                   # a real file: 8 s of silence then a tone
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

@@ -983,7 +983,7 @@ def review_items():
             et, ed, eg = split_meta(meta)
             out.append({"id": f.stem, "title": meta.get("yt_title", ""), "desc": meta.get("yt_description", ""), "caption": meta.get("tiktok_caption", ""),
                         "edit_title": et, "edit_desc": ed, "edit_tags": " ".join(eg), "edit_tiktok": meta.get("tiktok_custom", ""), "edited": bool(meta.get("edited")),
-                        "seconds": d.get("seconds"), "layout": d.get("layout"), "captions_off": d.get("captions_off"), "expires": review_expiry(d, f.stem, _days), "keep": bool(d.get("keep")), "origin": d.get("origin"), "raw": (REVIEW / (stem + ".raw")).exists() if d.get("origin") == "live" else None, "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "reviewed": bool(d.get("reviewed") or d.get("rating") in (1, -1)), "reason": d.get("reason"), "reasons": d.get("reasons"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
+                        "seconds": d.get("seconds"), "layout": d.get("layout"), "captions_off": d.get("captions_off"), "expires": review_expiry(d, f.stem, _days), "keep": bool(d.get("keep")), "origin": d.get("origin"), "raw": (REVIEW / (stem + ".raw")).exists() if d.get("origin") == "live" else None, "creator": d.get("source_channel"), "source": d.get("source_title"), "rating": d.get("rating", 0), "reviewed": bool(d.get("reviewed") or d.get("rating") in (1, -1)), "reason": d.get("reason"), "reasons": d.get("reasons"), "scheduled": d.get("scheduled"), "sched_missed": d.get("schedule_missed"), "sched_failed": d.get("schedule_failed"), "trim": d.get("trim"), "orig_seconds": d.get("orig_seconds") or d.get("seconds"), "rank": d.get("rank"), "score": d.get("score"), "features": d.get("features"),
                         "posted": json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {}, "status": REVIEW_STATUS.get(f.stem)})
         except Exception:
             continue
@@ -1068,7 +1068,7 @@ def review_schedule(stem, at, mode):
     if mode not in ("private", "public"):
         raise ValueError("bad visibility")
     d = json.loads(cj.read_text(encoding="utf-8"))
-    d["scheduled"] = {"at": when.isoformat(timespec="minutes"), "mode": mode}; d.pop("schedule_missed", None)
+    d["scheduled"] = {"at": when.isoformat(timespec="minutes"), "mode": mode}; d.pop("schedule_missed", None); d.pop("schedule_failed", None)
     cj.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
     sync_task_soon()
 
@@ -1121,7 +1121,7 @@ def review_autoschedule(mode, now=None, ids=None):
 def review_unschedule(stem):
     cj = REVIEW / (stem + ".json")
     if cj.exists():
-        d = json.loads(cj.read_text(encoding="utf-8")); d.pop("scheduled", None); d.pop("schedule_missed", None)
+        d = json.loads(cj.read_text(encoding="utf-8")); d.pop("scheduled", None); d.pop("schedule_missed", None); d.pop("schedule_failed", None)
         cj.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
         sync_task_soon()
 
@@ -1211,6 +1211,13 @@ def sched_post(stem, mode):
     """A scheduled post (nobody is watching): post it, then tell the user how it went."""
     review_post(stem, mode)
     st = REVIEW_STATUS.get(stem) or {}
+    if st.get("state") == "error":  # keep the failure on the clip itself (this may run without the dashboard, where the in-memory status would be lost)
+        try:
+            cj = REVIEW / (stem + ".json"); d = json.loads(cj.read_text(encoding="utf-8"))
+            d["schedule_failed"] = {"at": dt.datetime.now().isoformat(timespec="minutes"), "msg": str(st.get("msg", ""))[:300]}
+            cj.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+        except Exception:
+            pass
     notify("Clippy: scheduled post " + ("failed" if st.get("state") == "error" else "done"), st.get("msg", ""))
 
 
