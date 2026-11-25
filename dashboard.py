@@ -1304,8 +1304,8 @@ def sched_loop():
             pass
 
 
-def review_post(stem, mode="private", only=None):
-    """Post one review clip (in a thread): only to the platforms that are switched on and not done yet. One upload at a time (same lock file as autorun / live)."""
+def review_post(stem, mode="private", only=None, again=False):
+    """Post one review clip (in a thread): only to the platforms that are switched on and not done yet (again=True: a deliberate repost, also to the ones that are done). One upload at a time (same lock file as autorun / live)."""
     st = REVIEW_STATUS[stem] = {"state": "posting", "msg": "Waiting for the upload slot..."}
     lock = R / "post.lock"
     try:
@@ -1322,7 +1322,7 @@ def review_post(stem, mode="private", only=None):
         try:
             c, side = read_cfg(), REVIEW / (stem + ".posted.json")
             done = json.loads(side.read_text(encoding="utf-8")) if side.exists() else {}
-            want = [p for p, k in (("youtube", "post_youtube"), ("tiktok", "post_tiktok")) if c.get(k, True) and not done.get(p) and (only is None or p == only)]
+            want = [p for p, k in (("youtube", "post_youtube"), ("tiktok", "post_tiktok")) if c.get(k, True) and (again or not done.get(p)) and (only is None or p == only)]
             if not want:
                 st.update(state="done", msg="Already posted to the selected platforms."); return
             st["msg"] = "Uploading to " + " and ".join(w.capitalize() for w in want) + "..."
@@ -1678,7 +1678,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 if not (REVIEW / (stem + ".mp4")).exists():
                     return self.send(404, "clip not found", "text/plain")
                 only = body.get("only") if body.get("only") in ("youtube", "tiktok") else None  # the "Post on TikTok" / "Post on YouTube" buttons post to one platform
-                threading.Thread(target=review_post, args=(stem, vis, only), daemon=True).start()
+                threading.Thread(target=review_post, args=(stem, vis, only, bool(body.get("again"))), daemon=True).start()
             else:
                 review_remove(stem)
         elif self.path == "/api/review/remove_all":  # every clip in Ready to post (not the one being posted right now); cannot be undone
