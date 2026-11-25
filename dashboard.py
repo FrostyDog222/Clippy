@@ -776,6 +776,7 @@ def review_expire():
 
 def review_remove(stem, auto=False):
     """Take a clip out of Ready to post (its video and files are deleted; this cannot be undone)."""
+    d = {}
     try:  # removing a clip nobody rated and nobody posted = "meh": keep that as a learning example (the clip's signals are deleted with it)
         cf, pf = REVIEW / (stem + ".json"), REVIEW / (stem + ".posted.json")
         d = json.loads(cf.read_text(encoding="utf-8")) if cf.exists() else {}
@@ -793,19 +794,56 @@ def review_remove(stem, auto=False):
     for f in [REVIEW / (stem.replace("clip_", "meta_") + ".json")] + [g for g in REVIEW.glob(stem + ".*")]:
         review_unlink(f)  # a locked video is retried now and purged later (review_purge) if it still cannot go
     REVIEW_STATUS.pop(stem, None)
+    try:  # the whole job folder of the clip goes too (not while a run or an upload may be using it: the next clean-up sweeps it then)
+        if d and not running() and not (R / "post.lock").exists():
+            import cleanup
+            cleanup.drop_jobs_of(d, skip_stem=stem)
+    except Exception:
+        pass
 
 
-def clip_words(d):
-    """The words spoken in a clip, from the transcript of the job it was cut from (found by the source video id and the clip's time range)."""
-    sid, a, b = d.get("source_id"), float(d.get("start") or 0), float(d.get("end") or 0)
-    for job in sorted((R / "jobs").glob(f"{sid}-*")) if sid else []:
+def _job_for_url(url):
+    """The job folder Clippy made for this source link (the same name common.job_dir gives it), without creating it."""
+    import hashlib
+    if not url:
+        return None
+    stem = re.sub(r"[^a-z0-9]+", "-", str(url).split("v=")[-1].split("/")[-1].lower())[:24].strip("-")
+    p = R / "jobs" / f"{stem or 'job'}-{hashlib.sha1(str(url).encode()).hexdigest()[:8]}"
+    return p if p.exists() else None
+
+
+def clip_words(d, stem=None):
+    """The words spoken in a clip. Looked up in this order: the job it was cut from (a live clip remembers its job), the job of its source link (Twitch clips and YouTube videos),
+    the job found by the source video id, and last the small timing file kept next to the clip (words of the clip itself)."""
+    a, b = float(d.get("start") or 0), float(d.get("end") or 0)
+    def from_job(job):
         try:
-            words = json.loads((job / "transcript.json").read_text(encoding="utf-8"))
+            words = json.loads((pathlib.Path(job) / "transcript.json").read_text(encoding="utf-8"))
         except Exception:
-            continue
-        txt = " ".join(w["w"] for w in words if a <= w["s"] < b)
-        if txt.strip():
+            return ""
+        return " ".join(w["w"] for w in words if a <= w["s"] < b).strip()
+    jobs = []
+    if d.get("job"):
+        jobs.append(pathlib.Path(d["job"]))
+    j = _job_for_url(d.get("source_url"))
+    if j:
+        jobs.append(j)
+    sid = d.get("source_id")
+    if sid:
+        jobs += sorted((R / "jobs").glob(f"{sid}-*"))
+    for job in jobs:
+        txt = from_job(job)
+        if txt:
             return txt
+    if stem:  # the words saved with the clip itself (their times are shifted: clip start/end are inside the kept piece)
+        try:
+            k = json.loads((REVIEW / (stem + ".kit")).read_text(encoding="utf-8"))
+            ca, cb = float(k["cand"]["start"]), float(k["cand"]["end"])
+            txt = " ".join(w["w"] for w in k.get("words", []) if ca <= w["s"] < cb).strip()
+            if txt:
+                return txt
+        except Exception:
+            pass
     return ""
 
 
@@ -878,7 +916,7 @@ def review_rejoke(stem):
     cfg = read_cfg()
     if cfg.get("title_writer") not in ("claude", "api"):
         raise ValueError("A new joke needs the AI title writer: choose one in Settings (Claude or your own API key).")
-    text = clip_words(d)
+    text = clip_words(d, stem)
     if not text:
         raise ValueError("The words of this clip are no longer on this PC, so no new joke can be written. Use Edit text instead.")
     ai = ai_title.write(cfg, text, d.get("source_channel") or "", d.get("source_title") or "", kind=(d.get("features") or {}).get("kind"))

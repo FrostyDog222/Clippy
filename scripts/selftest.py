@@ -1210,6 +1210,60 @@ def test_post_buttons_can_post_to_one_platform_or_both():
     assert "Post on TikTok + YouTube" in html and "Post on YouTube" in html and "Already posted on " in html and "rvLabel" not in html
 
 
+def test_new_joke_finds_the_words_of_every_kind_of_clip():
+    import sys, tempfile, json, hashlib
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    tmp = Path(tempfile.mkdtemp()); (tmp / "review").mkdir(); (tmp / "jobs").mkdir()
+    keep = (d.R, d.REVIEW); d.R = tmp; d.REVIEW = tmp / "review"
+    try:
+        words = [{"w": w, "s": 1.0 + i * 0.4, "e": 1.3 + i * 0.4} for i, w in enumerate("the cop just ran over the bird".split())]
+        url = "https://www.twitch.tv/somebody/clip/MistyFastChickpeaBat-abc123"
+        key = hashlib.sha1(url.encode()).hexdigest()[:8]
+        job = tmp / "jobs" / f"mistyfastchickpeabat-abc-{key}"; job.mkdir()          # the real folder name keeps 24 characters of the link's last part
+        (job / "transcript.json").write_text(json.dumps(words))
+        clip = {"source_id": "tw:MistyFastChickpeaBat-abc123", "source_url": url, "start": 0.5, "end": 4.5}
+        assert d.clip_words(clip) == "the cop just ran over the bird"                    # a Twitch clip: found through its link (its id has a colon, the job folder has none)
+        (tmp / "review" / "17__clip_1.kit").write_text(json.dumps({"cand": {"start": 5.0, "end": 9.0}, "words": [{"w": "hello", "s": 6.0, "e": 6.2}, {"w": "there", "s": 6.5, "e": 6.7}]}))
+        gone = {"source_id": "x", "source_url": "https://nowhere/none", "start": 0, "end": 1}
+        assert d.clip_words(gone) == "" and d.clip_words(gone, "17__clip_1") == "hello there"   # the job is gone: the words kept with the clip are used
+        live = tmp / "jobs" / "live-job"; live.mkdir(); (live / "transcript.json").write_text(json.dumps(words))
+        assert d.clip_words({"job": str(live), "start": 0.5, "end": 4.5}) == "the cop just ran over the bird"   # a live clip remembers its job
+    finally:
+        d.R, d.REVIEW = keep
+
+
+def test_removing_a_clip_removes_its_whole_job_folder_unless_another_clip_needs_it():
+    import sys, tempfile, json, os, time
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import cleanup
+    tmp = Path(tempfile.mkdtemp()); (tmp / "review").mkdir(); (tmp / "jobs").mkdir()
+    keep = (cleanup.R, cleanup.JOBS); cleanup.R = tmp; cleanup.JOBS = (tmp / "jobs").resolve()
+    try:
+        def job(name, age_h=5):
+            p = tmp / "jobs" / name; (p / "edits").mkdir(parents=True); f = p / "transcript.json"; f.write_text("[]")
+            t = time.time() - age_h * 3600; os.utime(f, (t, t)); os.utime(p / "edits", (t, t)); os.utime(p, (t, t)); return p
+        a, b = job("vid1-aaaa1111"), job("vid1-t10-bbbb2222")                          # two slice jobs of the same video
+        url = "https://www.twitch.tv/x/clip/SomeClipName-123"
+        tw = job(cleanup.job_name_for_url(url))
+        other, fresh = job("zzzz-99999999"), job("fresh-12345678", age_h=0)
+        clipA = {"source_id": "vid1", "source_url": "https://youtube.com/watch?v=vid1"}
+        clipB = {"source_id": "vid1", "source_url": "https://youtube.com/watch?v=vid1"}
+        (tmp / "review" / "1__clip_1.json").write_text(json.dumps(clipA)); (tmp / "review" / "2__clip_1.json").write_text(json.dumps(clipB))
+        (tmp / "review" / "3__clip_1.json").write_text(json.dumps({"source_id": "tw:SomeClipName-123", "source_url": url}))
+        assert cleanup.drop_jobs_of(clipA, skip_stem="1__clip_1") == 0 and a.exists() and b.exists()            # clip 2 still needs the video's jobs
+        (tmp / "review" / "1__clip_1.json").unlink()
+        (tmp / "review" / "2__clip_1.json").unlink()
+        assert cleanup.drop_jobs_of(clipB, skip_stem="2__clip_1") == 2 and not a.exists() and not b.exists()   # the last clip of that video is gone: the whole folders go
+        assert tw.exists() and other.exists()                                                                   # other videos' folders are not touched by it
+        n, mb = cleanup.remove_orphans(dry=True)
+        assert n == 1 and other.exists()                                                                        # the sweep: only the old folder nobody needs (the Twitch clip is still in the list, the fresh one is recent)
+        cleanup.remove_orphans()
+        assert not other.exists() and tw.exists() and fresh.exists()
+    finally:
+        cleanup.R, cleanup.JOBS = keep
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""
