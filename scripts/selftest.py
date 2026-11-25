@@ -1264,6 +1264,24 @@ def test_removing_a_clip_removes_its_whole_job_folder_unless_another_clip_needs_
         cleanup.R, cleanup.JOBS = keep
 
 
+def test_scheduled_posts_have_a_windows_task_only_while_something_is_scheduled():
+    import sys, tempfile, json
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import dashboard as d
+    tmp = Path(tempfile.mkdtemp()); (tmp / "review").mkdir()
+    keep = d.REVIEW; d.REVIEW = tmp / "review"
+    try:
+        assert d.next_scheduled() is None                                   # nothing scheduled: no task wanted
+        for n, at in (("1", "2031-05-02T10:00"), ("2", "2031-05-01T09:30")):
+            (d.REVIEW / f"{n}__clip_1.json").write_text(json.dumps({"scheduled": {"at": at, "mode": "private"}}))
+        (d.REVIEW / "3__clip_1.posted.json").write_text(json.dumps({"scheduled": {"at": "2030-01-01T00:00"}}))
+        assert d.next_scheduled().isoformat() == "2031-05-01T09:30:00"      # the earliest one sets the task time
+        last = d._SYNC["last"]; d.sync_task()
+        assert d._SYNC["last"] == last                                      # (tests never touch the real Windows task)
+    finally:
+        d.REVIEW = keep
+
+
 def test_titles_survive_bad_on_video_text():
     r = ai_title.valid({"on_video": "x", "youtube_title": "A fine long title", "tiktok_line": "Bro is not built for this game"})
     assert r and r["on_video"] == ""

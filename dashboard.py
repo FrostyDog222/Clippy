@@ -1070,6 +1070,7 @@ def review_schedule(stem, at, mode):
     d = json.loads(cj.read_text(encoding="utf-8"))
     d["scheduled"] = {"at": when.isoformat(timespec="minutes"), "mode": mode}; d.pop("schedule_missed", None)
     cj.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+    sync_task_soon()
 
 
 def plan_slots(now, n, per_day, start, end, gap, taken):
@@ -1122,6 +1123,7 @@ def review_unschedule(stem):
     if cj.exists():
         d = json.loads(cj.read_text(encoding="utf-8")); d.pop("scheduled", None); d.pop("schedule_missed", None)
         cj.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+        sync_task_soon()
 
 
 def review_unpost(stem):
@@ -1130,7 +1132,7 @@ def review_unpost(stem):
     REVIEW_STATUS.pop(stem, None)
 
 
-def sched_tick(now=None):
+def sched_tick(now=None, wait=False):
     """Post the clips whose scheduled time has come. A time that was missed by more than SCHED_GRACE minutes is dropped (and shown as missed), never posted late by surprise."""
     now = now or dt.datetime.now(); started = []
     for f in (sorted(REVIEW.glob("*__clip_*.json")) if REVIEW.exists() else []):
@@ -1154,7 +1156,10 @@ def sched_tick(now=None):
         except Exception:
             continue
     for stem, mode in started:
-        threading.Thread(target=sched_post, args=(stem, mode), daemon=True).start()
+        if wait:
+            sched_post(stem, mode)
+        else:
+            threading.Thread(target=sched_post, args=(stem, mode), daemon=True).start()
     return [x[0] for x in started]
 
 
@@ -1209,11 +1214,83 @@ def sched_post(stem, mode):
     notify("Clippy: scheduled post " + ("failed" if st.get("state") == "error" else "done"), st.get("msg", ""))
 
 
+TASK_NAME = "ClippyScheduled"
+_SYNC = {"last": "?", "pending": False}
+
+
+def next_scheduled():
+    """The earliest time of a scheduled clip in Ready to post, or None."""
+    best = None
+    for f in (REVIEW.glob("*__clip_*.json") if REVIEW.exists() else []):
+        if f.name.endswith(".posted.json"):
+            continue
+        try:
+            sc = json.loads(f.read_text(encoding="utf-8")).get("scheduled")
+            if sc:
+                at = dt.datetime.fromisoformat(sc["at"])
+                best = at if best is None or at < best else best
+        except Exception:
+            pass
+    return best
+
+
+def sync_task():
+    """Posts must go out with Clippy closed: ONE Windows scheduled task (this user, no admin) is set to the earliest scheduled time and starts `dashboard.py --sched-once`,
+    which posts what is due and exits. No scheduled clip = no task at all (nothing runs)."""
+    try:
+        if os.name != "nt" or REVIEW.parent != pathlib.Path(__file__).resolve().parent:  # (tests use another folder)
+            return
+        at = next_scheduled()
+        key = at.isoformat() if at else ""
+        if key == _SYNC["last"]:
+            return
+        env = {**os.environ}
+        if at:
+            py = pathlib.Path(sys.executable); pw = py.with_name("pythonw.exe")
+            env.update(C_PY=str(pw if pw.exists() else py), C_ARG=f'"{pathlib.Path(__file__).resolve()}" --sched-once', C_DIR=str(R),
+                       C_AT=max(at, dt.datetime.now() + dt.timedelta(minutes=1)).isoformat(timespec="seconds"))
+            ps = ("$a=New-ScheduledTaskAction -Execute $env:C_PY -Argument $env:C_ARG -WorkingDirectory $env:C_DIR;"
+                  "$t=New-ScheduledTaskTrigger -Once -At ([datetime]$env:C_AT);"
+                  "$s=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 3);"
+                  f"Register-ScheduledTask -TaskName {TASK_NAME} -Action $a -Trigger $t -Settings $s -Force | Out-Null")
+        else:
+            ps = f"Unregister-ScheduledTask -TaskName {TASK_NAME} -Confirm:$false -ErrorAction SilentlyContinue"
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps], creationflags=NOWIN, env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+        if r.returncode == 0:
+            _SYNC["last"] = key
+    except Exception:
+        pass
+
+
+def sync_task_soon():
+    """After a schedule changed: update the Windows task once (many changes at once = one update)."""
+    if _SYNC["pending"]:
+        return
+    _SYNC["pending"] = True
+    def go():
+        time.sleep(2); _SYNC["pending"] = False; sync_task()
+    threading.Thread(target=go, daemon=True).start()
+
+
+def sched_once():
+    """Started by the Windows task while the dashboard is closed: post what is due, then set the task for the next scheduled time. If the dashboard is open it posts by itself."""
+    import socket
+    try:
+        socket.create_connection(("127.0.0.1", PORT), 1).close()
+        return
+    except OSError:
+        pass
+    sched_tick(wait=True)
+    _SYNC["last"] = "?"; sync_task()
+
+
 def sched_loop():
     while True:
         time.sleep(30)
         try:
             sched_tick()
+            sync_task()
             notify_tick()
             review_expire()
         except Exception:
@@ -1801,6 +1878,9 @@ def single_dashboard():
 
 if __name__ == "__main__":
     os.chdir(R)  # Windows starts it from another folder
+    if "--sched-once" in sys.argv:  # started by the Windows task: post what is due and exit
+        sched_once()
+        sys.exit(0)
     try:
         _NOTIFIED["ts"] = (progress() or {}).get("ts")  # an old finished run must not pop up again after a restart
     except Exception:
