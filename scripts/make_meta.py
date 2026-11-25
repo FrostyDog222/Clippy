@@ -32,8 +32,21 @@ tag_name = re.sub(r"[^A-Za-z0-9]", "", re.sub(r"\s+(live|raw|clips|highlights|vo
 stream_tags = f" #{tag_name}" if tag_name else ""
 shown = re.sub(r"\s+(live|raw|clips|highlights|vods?)$", "", real, flags=re.I).strip() if real else ""  # streamer name as plain text (no link)
 who = f"🎮 {shown}" if shown else ""
-lines = [blurb or hook + ".", *([who] if who else []), "", f"{TAGS}{stream_tags} #Shorts #fyp"]
-caption = f"{blurb or hook} {who} {TAGS}{stream_tags} #Shorts #fyp".replace("  ", " ")
+def pick_tags(max_n):
+    """The automatic hashtags in the order they are shown, cut to `max_n` (Settings, "Hashtags per video"): the least useful ones go first (#Gameplay / #Viral, then #fyp, then #Gaming)."""
+    shown_order = [*TAGS.split(), *stream_tags.split(), "#Shorts", "#fyp"]
+    keep = sorted(shown_order, key=lambda t: (t == TP["tag"] and not TP["any"]) * -4 + (t.lower() == f"#{tag_name}".lower() and bool(tag_name)) * -3 + (t == "#Shorts") * -2
+                  + (t == "#Gaming") * -1 + (t in ("#Gameplay", "#Viral")) * 3 + (t == "#fyp") * 1)[:max(0, max_n)]
+    return [t for t in shown_order if t in keep]
+
+
+try:
+    max_tags = int(json.loads((pathlib.Path(__file__).resolve().parent.parent / "autopost_config.json").read_text(encoding="utf-8")).get("max_hashtags", 5))
+except Exception:
+    max_tags = 5
+tagline = " ".join(pick_tags(max_tags))
+lines = [blurb or hook + ".", *([who] if who else []), "", tagline] if tagline else [blurb or hook + ".", *([who] if who else [])]
+caption = f"{blurb or hook} {who} {tagline}".replace("  ", " ").strip()
 meta = {"yt_title": title, "yt_description": "\n".join(lines), "tiktok_caption": caption[:150],
         "checks": "template (no AI): real quote from the clip, source and creator credit + link, banned words, swears masked, length limits"}
 out = f.with_name(f.name.replace("clip_", "meta_"))
