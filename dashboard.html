@@ -440,6 +440,10 @@ return{c:'r',t:'Not working',tip:e||'no answer'}}
 async function runTest(p){const k=aiK(p);AIST[k]={c:'w',t:'Checking...'};keyLight();let j={};try{const r=await fetch('/api/aitest',{method:'POST',body:JSON.stringify({id:p.id,url:p.url,model:p.model})});j=await r.json()}catch(e){j={error:'could not reach Clippy: '+e}}AIST[k]=aiVerdict(j);keyLight();return j}
 function checkProf(){(draft.ai_profiles||[]).forEach(p=>{if(!aiReady(p)&&!AIST[aiK(p)])runTest(p)})}
 // the best model to start with from a provider's list: a fast, current text model (not embeddings, speech, images...)
+const AUTONAME={};
+function provName(u){const h=((u||'').match(/^https?:\/\/([^\/:]+)/)||[])[1]||'';if(/localhost|127\.0\.0\.1/.test(h))return'Local';if(/googleapis/.test(h))return'Gemini';if(/anthropic/.test(h))return'Claude';const d=h.split('.').slice(-2,-1)[0]||h;return{openai:'OpenAI',openrouter:'OpenRouter',groq:'Groq'}[d]||(d?d[0].toUpperCase()+d.slice(1):'')}
+// a profile still called "New model" (or the name Clippy gave it before) is named after its provider and model
+function autoName(p){if(!p.model)return;const n=provName(p.url)+' '+p.model;if(!p.name||p.name==='New model'||p.name===AUTONAME[p.id]){p.name=n.trim();AUTONAME[p.id]=p.name}}
 function bestModel(l){const ok=l.filter(m=>!/embed|tts|image|audio|whisper|moderation|dall|imagen|veo|robotics|aqa|transcribe|realtime|live|guard/i.test(m));
 const stable=m=>!/preview|exp|lite|latest|-\d{4}-\d\d-\d\d$/i.test(m);for(const rx of [/flash/i,/mini/i,/haiku/i,/sonnet/i,/gpt|llama|qwen|gemma/i]){const c=ok.filter(m=>rx.test(m)).sort().reverse();const s=c.find(stable)||c[0];if(s)return s}return ok[0]||l[0]||''}
 // a provider from the first letters of its key, so the address can be filled in by itself
@@ -455,7 +459,7 @@ async function delProf(id){const p=(draft.ai_profiles||[]).find(x=>x.id===id)||p
 // auto: also pick a model by itself when none is set or the set one is not in the provider's list
 async function loadModels(auto){const p=prof();if(!p||!p.url)return;$('mcount').textContent='(loading...)';const r=await fetch('/api/models',{method:'POST',body:JSON.stringify({id:p.id,url:p.url})});
 const j=await r.json().catch(()=>({}));if(j.models){$('modellist').innerHTML=j.models.map(m=>'<option value="'+esc(m)+'">').join('');$('mcount').textContent='('+j.models.length+' found: click the box to pick)';
-if(auto===true&&j.models.length&&!j.models.includes(p.model)){const was=p.model;p.model=bestModel(j.models);$('p_model').value=p.model;$('mcount').textContent='('+j.models.length+' found, picked '+p.model+(was?' because "'+was+'" is not offered':'')+')';chg();renderProf()}}else{$('mcount').textContent='(could not load: '+(j.error||'save the key first, check the address')+')'}return j}
+if(auto===true&&j.models.length&&!j.models.includes(p.model)){const was=p.model;p.model=bestModel(j.models);$('p_model').value=p.model;$('mcount').textContent='('+j.models.length+' found, picked '+p.model+(was?' because "'+was+'" is not offered':'')+')';chg();renderProf()}if(auto===true){autoName(p);$('p_name').value=p.name;listRows();chg()}}else{$('mcount').textContent='(could not load: '+(j.error||'save the key first, check the address')+')'}return j}
 async function testAI(){const p=prof();if(!p)return;$('aitest').textContent='Testing...';const j=await runTest(p);
 $('aitest').textContent=j.ok?'Works: answered "'+j.text+'" in '+j.ms+' ms':'Failed: '+(j.error||'no answer')}
 ['url','model'].forEach(k=>$('p_'+k).addEventListener('change',async()=>{const p=prof();if(!p)return;if(k==='url'&&p.url&&(srvKeys[p.id]||aiLocal(p)))await loadModels(true);checkProf()}));

@@ -11,6 +11,7 @@ import textutil  # noqa: E402
 import ai_title  # noqa: E402
 import secretstore  # noqa: E402
 from friendly import friendly  # noqa: E402
+from urllib.parse import urlparse  # noqa: E402
 
 CFG, STATE, PAUSE, LOG, PROG = (R / "autopost_config.json", R / "autopost_state.json", R / "PAUSED.txt",
                                 R / "autopost_log.md", R / "progress.json")
@@ -1538,6 +1539,9 @@ class H(http.server.BaseHTTPRequestHandler):
             if not re.match(r"^[a-z0-9_-]{1,24}$", pid):
                 return self.send(400, "bad profile", "text/plain")
             key = secretstore.load(f"key_{pid}")
+            th = (urlparse(url).hostname or "").lower()  # the address typed in Settings is not saved yet, so the network guard does not know it: allow just this host for this one request
+            if re.match(r"^[a-z0-9.-]+$", th) and self.headers.get("Host", "").split(":")[0] in ("127.0.0.1", "localhost"):
+                os.environ["CLIPPY_TEST_HOST"] = th
             try:
                 if self.path == "/api/models":
                     return self.send(200, json.dumps({"models": ai_title.list_models(url, key)}))
@@ -1546,6 +1550,8 @@ class H(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 msg = re.sub(r"(key|token)=[^&\s]+", r"\1=***", str(e))[:240]
                 return self.send(200, json.dumps({"ok": False, "error": msg}))
+            finally:
+                os.environ.pop("CLIPPY_TEST_HOST", None)
         elif self.path == "/api/cleanup":
             if running():
                 return self.send(409, "A run is in progress: wait until it finishes", "text/plain")

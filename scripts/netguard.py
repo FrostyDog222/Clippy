@@ -47,6 +47,7 @@ def allowed_suffixes():
         h = urlparse(c.get("title_api_url") or "").hostname
         if h:
             out.append(h.lower())
+    out += [h for h in os.environ.get("CLIPPY_TEST_HOST", "").lower().split(",") if h]  # only while the dashboard tests / lists the models of the address you just typed in Settings (set for that one request, then removed)
     if os.environ.get("CLIPPY_ALLOW_PYPI"):
         out += PYPI
     # one-time model downloads happen only from setup.bat, which sets these after asking you (they are never on during normal runs)
