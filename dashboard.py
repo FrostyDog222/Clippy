@@ -367,6 +367,8 @@ def start_signin():
     """Open the dedicated Chrome window so the user signs in; when it is closed, re-check status automatically."""
     if _busy["what"] or running():
         return "Busy: wait for the current run or check to finish"
+    if (R / "post.lock").exists():
+        return "Busy: an upload is running right now. Try again when it is done."
     def w():
         try:
             subprocess.run([BGPY, "scripts/upload.py", "login"], cwd=R, timeout=3600)

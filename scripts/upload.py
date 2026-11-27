@@ -100,7 +100,9 @@ def start_chrome(port=None, only=None, mode=None):
         args += (["--headless=new"] if mode == "headless" else ["--start-minimized"] if mode == "minimized"
                  else ["--window-position=-3000,0"] if mode == "offscreen" else [])
     else:
-        args += ["https://studio.youtube.com", "https://www.tiktok.com/login"]
+        # the sign-in window: ALWAYS on screen. Chrome remembers the last window position of this profile, and the background (off-screen) upload windows leave it at x = -3000, so without
+        # an explicit position the sign-in window opened out of sight and could not be clicked
+        args += ["--window-position=80,60", "--window-size=1280,860", "https://studio.youtube.com", "https://www.tiktok.com/login"]
     si = None
     if port and sys.platform == "win32" and mode in ("offscreen", "minimized"):  # ask Windows to show the window WITHOUT taking focus (a game in front is not pushed to the taskbar)
         si = subprocess.STARTUPINFO(); si.dwFlags |= subprocess.STARTF_USESHOWWINDOW; si.wShowWindow = 7 if mode == "minimized" else 4  # SW_SHOWMINNOACTIVE / SW_SHOWNOACTIVATE
@@ -262,9 +264,53 @@ def tiktok(page, clip, caption, public):
     return "posted" if note == "ok" else "posted (privacy corrected to Only me)" if note == "fixed" else f"posted (PRIVACY_CHECK {note})"
 
 
+def free_profile():
+    """Close any Chrome that still uses Clippy's own profile (only that one, never your own Chrome): a leftover background / off-screen one would swallow the sign-in window
+    (a second Chrome on the same profile opens its window INSIDE the first one, out of sight and without focus)."""
+    if sys.platform != "win32":
+        return
+    ps = ("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object { $_.CommandLine -and $_.CommandLine.ToLower().Contains($env:CLIPPY_PROF) } | "
+          "ForEach-Object { taskkill /PID $_.ProcessId /T /F | Out-Null }")
+    try:
+        subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps], creationflags=NOWIN, capture_output=True, timeout=30,
+                       env={**os.environ, "CLIPPY_PROF": str(PROFILE).lower()})
+        time.sleep(1.5)
+    except Exception:
+        pass
+
+
+def bring_to_front(pid, secs=20):
+    """Windows: put the sign-in window in front and give it the focus (a window started by a background program does not get the focus by itself)."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    from ctypes import wintypes as wt
+    u = ctypes.windll.user32
+    end, done = time.time() + secs, False
+    while time.time() < end and not done:
+        hits = []
+        def cb(h, _):
+            p = wt.DWORD()
+            u.GetWindowThreadProcessId(h, ctypes.byref(p))
+            if p.value == pid and u.IsWindowVisible(h) and u.GetWindowTextLengthW(h) > 0:
+                hits.append(h)
+            return True
+        u.EnumWindows(ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)(cb), 0)
+        for h in hits:
+            u.ShowWindow(h, 9)                       # SW_RESTORE
+            u.keybd_event(0x12, 0, 0, 0)             # a tap on Alt lets this program change the foreground window
+            u.SetForegroundWindow(h)
+            u.keybd_event(0x12, 0, 2, 0)
+            done = True
+        time.sleep(0.5)
+
+
 def cmd_login():
     print("Chrome opened with the dedicated profile. Sign in to YouTube/Google and TikTok, then close the window.")
-    start_chrome().wait()
+    free_profile()
+    p = start_chrome()
+    bring_to_front(p.pid)
+    p.wait()
 
 
 def cmd_status():
