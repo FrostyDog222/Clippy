@@ -1312,6 +1312,21 @@ def test_clip_edges_dead_moments_slow_openings_and_mid_sentence_cuts():
     assert autorun._edge_gate(Path(tempfile.mkdtemp()), {"start": 5.0, "end": 35.0}, ["x"])[1:] == (["x"], [], None)   # no map and no transcript: untouched
 
 
+def test_a_clip_whose_source_stops_mid_sentence_is_ended_on_a_finished_sentence_or_skipped():
+    import pick_rules as P
+    w = [{"w": "No", "s": 14.3, "e": 14.7}, {"w": "way,", "s": 14.7, "e": 15.0}, {"w": "bro.", "s": 15.04, "e": 15.4}, {"w": "I'm", "s": 15.7, "e": 16.1}, {"w": "going", "s": 16.1, "e": 16.5},
+         {"w": "home.", "s": 16.5, "e": 17.0}, {"w": "Wow,", "s": 26.66, "e": 27.06}, {"w": "this", "s": 27.06, "e": 27.46}, {"w": "puts", "s": 27.46, "e": 27.8}, {"w": "it", "s": 27.8, "e": 28.2},
+         {"w": "to", "s": 28.2, "e": 28.6}, {"w": "a", "s": 28.6, "e": 28.9}, {"w": "whole", "s": 28.9, "e": 29.92}]
+    assert P.unfinished_tail(w, 13.0, 30.02, 30.016, 14)[0] is None                       # "to a whole": cut off, and the finished part is shorter than 14 s: skip
+    e, note = P.unfinished_tail(w, 13.0, 30.02, 30.016, 3)                                # a short finished part is allowed here: end on "home."
+    assert note and 17.2 < e < 17.5
+    ok = w[:-4] + [{"w": "wow.", "s": 27.0, "e": 29.9}]
+    assert P.unfinished_tail(ok, 13.0, 30.02, 30.016, 14) == (30.02, None)                # ends with a full stop: fine
+    bruh = [{"w": "Hey", "s": 25.0, "e": 25.3}, {"w": "somebody", "s": 25.3, "e": 25.9}, {"w": "clip", "s": 25.9, "e": 26.2}, {"w": "that", "s": 26.2, "e": 26.5}, {"w": "bruh", "s": 26.6, "e": 29.1}]
+    assert P.unfinished_tail(bruh, 24.0, 29.4, 29.419, 3) == (29.4, None)                 # a finished sentence without a full stop is not touched
+    assert P.unfinished_tail(w, 13.0, 25.0, 600.0, 14) == (25.0, None)                    # the source goes on after the clip: nothing to do
+
+
 def test_clips_that_are_silent_for_long_stretches_fail_the_check():
     import sys, subprocess, tempfile
     sys.path.insert(0, str(Path(__file__).resolve().parent))

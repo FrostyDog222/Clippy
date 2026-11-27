@@ -284,3 +284,32 @@ def snap_to_speech(words, start, end, min_len, max_len, dur=None):
                 if p is not None and words[p]["e"] + 0.3 - start >= min_len:
                     end = words[p]["e"] + 0.3; notes.append("end moved back to the end of the previous sentence")
     return round(start, 2), round(end, 2), notes
+
+
+# A viewer-made Twitch clip (or any short source) can simply end in the middle of a sentence ("... puts family-friendly destruction to a whole"): there is no more footage to finish it.
+DANGLING_LAST = {"a", "an", "the", "to", "of", "in", "on", "at", "for", "with", "from", "into", "by", "and", "but", "or", "so", "because", "if", "when", "while", "that", "which", "who",
+                 "than", "as", "is", "are", "was", "were", "be", "been", "have", "has", "had", "will", "would", "can", "could", "my", "your", "his", "her", "their", "our", "like", "gonna", "about"}
+DANGLING_PREV = {"a", "an", "the", "to", "of", "in", "on", "at", "for", "with", "from", "into", "my", "your", "his", "her", "their", "our"}   # "to a whole" / "in the": a noun is missing
+
+
+def unfinished_tail(words, start, end, src_dur, min_len):
+    """When the speech runs right up to the end of the source and stops mid-sentence (no . ! ? and the last words are dangling: "to a whole", "and the", "because"),
+    return (new_end, note): the end of the last finished sentence when at least min_len seconds remain, else (None, reason) = skip this moment. (end, None) = fine."""
+    if not words or not src_dur:
+        return end, None
+    ws = [k for k, w in enumerate(words) if start <= w["s"] < end]
+    if not ws:
+        return end, None
+    j = ws[-1]
+    last = words[j]
+    t = last["w"].strip()
+    if last["e"] < src_dur - 0.7 or t[-1:] in ".!?":
+        return end, None
+    low = re.sub(r"[^\w']+", "", t.lower())
+    prev = re.sub(r"[^\w']+", "", words[j - 1]["w"].lower()) if j > 0 else ""
+    if low not in DANGLING_LAST and prev not in DANGLING_PREV:
+        return end, None
+    p = next((k for k in range(j - 1, -1, -1) if words[k]["s"] >= start and _sentence_end(words, k)), None)
+    if p is not None and words[p]["e"] + 0.3 - start >= min_len:
+        return round(words[p]["e"] + 0.3, 2), "the source stops in the middle of a sentence: ended on the last finished one"
+    return None, "the source stops in the middle of a sentence and there is no finished one to end on"

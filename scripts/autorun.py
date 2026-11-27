@@ -530,6 +530,16 @@ def _edge_gate(job, c, cut_range):
     if words:
         s0, e0, more = PR.snap_to_speech(words, s0, e0, LIMITS[0], LIMITS[1], float(len(al)) if al else None)
         notes += more
+    if words:
+        try:
+            src_dur = float(json.loads((job / "candidates.json").read_text(encoding="utf-8")).get("duration") or 0)
+        except Exception:
+            src_dur = 0.0
+        e1, note = PR.unfinished_tail(words, s0, e0, src_dur, LIMITS[0])
+        if e1 is None:
+            return c, cut_range, notes, note
+        if note:
+            notes.append(note); e0 = e1
     if al:
         why = PR.dead_moment(al, s0, e0)
         if why:
