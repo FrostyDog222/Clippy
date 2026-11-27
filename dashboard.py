@@ -1293,6 +1293,17 @@ def sched_once():
     _SYNC["last"] = "?"; sync_task()
 
 
+_CLEAN = {"t": 0.0}
+
+
+def clean_tick():
+    """Every 30 minutes while the dashboard runs: free the disk (source videos, old clips, job folders nobody needs). Skipped while an upload runs; cleanup.py itself never touches a job that was used recently."""
+    if time.time() - _CLEAN["t"] < 1800 or (R / "post.lock").exists():
+        return
+    _CLEAN["t"] = time.time()
+    cleanup.run()
+
+
 def sched_loop():
     while True:
         time.sleep(30)
@@ -1301,6 +1312,7 @@ def sched_loop():
             sync_task()
             notify_tick()
             review_expire()
+            clean_tick()
         except Exception:
             pass
 

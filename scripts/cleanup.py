@@ -90,7 +90,7 @@ def remove_orphans(dry=False, idle_min=120):
             continue
         try:
             files = [f for f in j.rglob("*") if f.is_file()]
-            last = max([j.stat().st_mtime] + [f.stat().st_mtime for f in files])
+            last = max([f.stat().st_mtime for f in files] or [j.stat().st_mtime])  # file times only: deleting a file (the source video, just before) changes the FOLDER's time and made every job look busy
             if now - last < idle_min * 60:
                 continue
             freed += sum(f.stat().st_size for f in files) / 1e6
