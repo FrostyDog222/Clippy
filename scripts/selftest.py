@@ -1035,6 +1035,7 @@ def test_twitch_clip_options_are_validated_and_reach_the_search():
     ok = d.clean({**copy.deepcopy(base), "twitch_clips": "only", "twitch_period": "month", "twitch_per_streamer": 12}, base)
     assert (ok["twitch_clips"], ok["twitch_period"], ok["twitch_per_streamer"]) == ("only", "month", 12)
     assert d.clean({**copy.deepcopy(base), "twitch_priority": True}, base)["twitch_priority"] is True and d.clean({**copy.deepcopy(base)}, base)["twitch_priority"] is False   # the checkmark: on = prioritize, off = normal order
+    assert d.clean({**copy.deepcopy(base), "twitch_clips": "off"}, base)["twitch_clips"] == "off"  # YouTube videos only
     bad = d.clean({**copy.deepcopy(base), "twitch_clips": "nope", "twitch_period": "year", "twitch_per_streamer": 999}, base)
     assert (bad["twitch_clips"], bad["twitch_period"], bad["twitch_per_streamer"]) == ("first", "week", 15)           # unknown values fall back, the count is capped
     seen = {}
@@ -1366,6 +1367,101 @@ def test_searches_and_twitch_clips_follow_the_picked_language():
     assert "gta 6 gameplay" in textutil.search_queries(q, {"languages": ["en", "es"]}) and any("espa" in x for x in textutil.search_queries(q, {"languages": ["en", "es"]}))
     assert textutil.twitch_languages({"languages": ["ro", "es"]}) == ["RO", "ES"] and textutil.twitch_languages({"languages": []}) is None
     assert "languages:[RO,ES]" in twitch._q_clips(["RO", "ES"]) and "languages" not in twitch._q_clips(None) and "languages:[EN]" in twitch._q_clips(("EN",))
+
+
+def test_health_offers_a_repair_button_for_what_is_missing():
+    import health
+    it = {x["id"]: x for x in health.checks({}, {}, None, 50, 0, {"chrome": False, "ffmpeg": False, "ytdlp": False, "js": False, "ai_key": True})}
+    assert it["ffmpeg"]["fix"]["action"] == "install:ffmpeg" and it["ytdlp"]["fix"]["action"] == "install:ytdlp" and it["chrome"]["fix"]["action"] == "install:browser" and it["js"]["fix"]["action"] == "install:deno"
+    ok = {x["id"]: x for x in health.checks({}, {}, None, 50, 0, {"chrome": True, "ffmpeg": True, "ytdlp": True, "js": True, "ai_key": True})}
+    assert ok["ffmpeg"]["fix"] is None and "js" not in ok
+    assert {x["id"]: x for x in health.checks({}, {}, None, 5, 0, {"chrome": True, "ffmpeg": True, "ytdlp": True})}["disk"]["fix"]["action"] == "cleanup"
+
+
+def test_where_to_look_modes_decide_which_sources_a_run_uses():
+    """Settings, "Where to look": first = Twitch clips then YouTube; only = Twitch clips only; off = YouTube videos only. Also: How far back, clips per streamer, Prioritize."""
+    import json, shutil, tempfile, types
+    tmp = Path(tempfile.mkdtemp())
+    names = ["R", "progress", "yt_blocked", "creator_twitch_clips", "search_twitch_clips", "search_creator", "search_trending", "try_videos", "flush", "review_ids", "cut_pending", "log", "configure"]
+    saved = {k: getattr(autorun, k) for k in names}
+    saved_mod, saved_learn_fit, saved_argv = sys.modules.get("update_ytdlp"), learn.fit, sys.argv
+    calls = []
+    def run(cfg):
+        calls.clear()
+        (tmp / "autopost_config.json").write_text(json.dumps({"creators": ["A", "B"], "use_trending_fallback": True, "auto_post": False, "topic": "GTA 6", "languages": ["en"], **cfg}), encoding="utf-8")
+        sys.argv = ["autorun.py", "--force", "--manual"]
+        autorun._main()
+        return list(calls)
+    try:
+        autorun.R = tmp
+        autorun.progress = lambda *a, **k: None
+        autorun.yt_blocked = lambda: 0
+        autorun.review_ids = lambda: set()
+        autorun.flush = lambda dry: None
+        autorun.cut_pending = lambda dry: None
+        autorun.log = lambda *a, **k: None
+        autorun.creator_twitch_clips = lambda c, ids, top=3, period="LAST_WEEK": calls.append(("tw_creator", c, top, period)) or []
+        autorun.search_twitch_clips = lambda ids: calls.append(("tw_trending",)) or []
+        autorun.search_creator = lambda c, days=3: calls.append(("yt_creator", c)) or []
+        autorun.search_trending = lambda ch, ids: calls.append(("yt_trending",)) or []
+        autorun.try_videos = lambda *a, **k: None
+        sys.modules["update_ytdlp"] = types.SimpleNamespace(main=lambda **k: None)
+        learn.fit = lambda: None
+        kinds = lambda cs: [k for i, k in enumerate(c[0] for c in cs) if i == 0 or k != cs[i - 1][0]]  # in order, a repeat of the same source in a row (every streamer, the 7-day retry) counted once
+        first = run({"twitch_clips": "first"})
+        assert kinds(first) == ["tw_creator", "yt_creator", "tw_trending", "yt_trending"], first  # Twitch clips of each streamer, then their YouTube videos, then trending (both)
+        only = run({"twitch_clips": "only"})
+        assert kinds(only) == ["tw_creator", "tw_trending"], only                                            # no YouTube at all
+        off = run({"twitch_clips": "off"})
+        assert kinds(off) == ["yt_creator", "yt_trending"], off                                              # no Twitch at all
+        assert kinds(run({"twitch_clips": "off", "twitch_priority": True})) == ["yt_creator", "yt_trending"]  # "prioritize Twitch" cannot bring Twitch back
+        pri = kinds(run({"twitch_clips": "first", "twitch_priority": True}))
+        assert pri == ["tw_creator", "tw_trending", "yt_creator", "tw_trending", "yt_trending"], pri                       # the topic's Twitch clips come BEFORE any YouTube video
+        per = run({"twitch_clips": "first", "twitch_period": "month", "twitch_per_streamer": 9})[0]
+        assert per == ("tw_creator", per[1], 9, "LAST_MONTH"), per                                                         # How far back + clips per streamer reach the search
+        assert run({"twitch_clips": "first", "twitch_period": "all", "twitch_per_streamer": 3})[0][2:] == (3, "ALL_TIME")
+    finally:
+        for k, v in saved.items():
+            setattr(autorun, k, v)
+        if saved_mod is None:
+            sys.modules.pop("update_ytdlp", None)
+        else:
+            sys.modules["update_ytdlp"] = saved_mod
+        learn.fit, sys.argv = saved_learn_fit, saved_argv
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_health_repair_buttons_run_the_right_installer():
+    import dashboard as d, subprocess, types
+    seen = []
+    real_run, real_which = d.subprocess.run, d.shutil.which
+    try:
+        d.subprocess.run = lambda cmd, **k: seen.append((list(cmd), k.get("env", {}).get("CLIPPY_ALLOW_PYPI"))) or types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+        d.shutil.which = lambda n: "C:/x/winget.exe" if n == "winget" else real_which(n)
+        for what in ("ffmpeg", "browser", "deno", "ytdlp"):
+            d.FIX.update(what=None, state="", msg="")
+            d._fix_worker(what)
+            assert d.FIX["state"] == "done", (what, d.FIX)
+        assert seen[0][0][:5] == ["winget", "install", "-e", "--id", "Gyan.FFmpeg"] and "--silent" in seen[0][0], seen[0]
+        assert seen[1][0][4] == "Google.Chrome" and seen[2][0][4] == "DenoLand.Deno", seen
+        assert seen[3][0][-3:] == ["install", "-U", "yt-dlp[default]"] and seen[3][1] == "1", seen[3]   # pip gets PyPI access for this one call only
+        d.FIX.update(what=None, state="", msg="")
+        try:
+            d.start_fix("rm -rf")
+            assert False
+        except ValueError:
+            pass
+        d.FIX.update(what="ffmpeg", state="running", msg="")
+        try:
+            d.start_fix("ffmpeg")
+            assert False
+        except RuntimeError:
+            pass
+        d._HEALTH["t"] = 0; d._HEALTH["v"] = None
+    finally:
+        d.subprocess.run, d.shutil.which = real_run, real_which
+        d.FIX.update(what=None, state="", msg="")
+        d._HEALTH["t"] = 0
 
 
 if __name__ == "__main__":

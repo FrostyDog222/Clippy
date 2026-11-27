@@ -606,7 +606,7 @@ def clean(new, old):
     if out["private_days"] != int(old.get("private_days", 0) or 0):
         out["start_date"] = dt.date.today().isoformat()  # "private for N days" counts from the moment the user sets N (there is no start-date field any more)
     out["creators"] = [str(s)[:60] for s in new["creators"]][:50]
-    out["twitch_clips"] = new.get("twitch_clips") if new.get("twitch_clips") in ("first", "only") else "first"
+    out["twitch_clips"] = new.get("twitch_clips") if new.get("twitch_clips") in ("first", "only", "off") else "first"
     out["twitch_period"] = new.get("twitch_period") if new.get("twitch_period") in ("week", "month", "all") else "week"
     try:
         out["twitch_per_streamer"] = max(3, min(15, int(new.get("twitch_per_streamer", 6) or 6)))
@@ -1552,6 +1552,14 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.send(200, json.dumps({"ok": False, "error": msg}))
             finally:
                 os.environ.pop("CLIPPY_TEST_HOST", None)
+        elif self.path == "/api/fix":  # the Health card's repair buttons: install what is missing (winget / pip), only after the user confirmed in the page
+            if self.headers.get("Host", "").split(":")[0] not in ("127.0.0.1", "localhost"):
+                return self.send(400, "refused", "text/plain")
+            try:
+                start_fix(str(json.loads(self.rfile.read(n)).get("what", "")))
+            except (ValueError, RuntimeError) as e:
+                return self.send(409, str(e), "text/plain")
+            _HEALTH["t"] = 0
         elif self.path == "/api/cleanup":
             if running():
                 return self.send(409, "A run is in progress: wait until it finishes", "text/plain")
@@ -1819,6 +1827,58 @@ def startup_blocked(argv, cfg):
 _HEALTH = {"t": 0.0, "v": None}
 
 
+FIXES = {"ffmpeg": ("ffmpeg", "Gyan.FFmpeg", "ffmpeg"), "browser": ("Google Chrome", "Google.Chrome", "chrome"), "deno": ("Deno", "DenoLand.Deno", "js"), "ytdlp": ("yt-dlp", "", "ytdlp")}
+FIX = {"what": None, "state": "", "msg": ""}  # the repair started from the Health card (one at a time)
+
+
+def refresh_path():
+    """A program installed a moment ago is not in the PATH this process started with: add the current user + machine PATH and winget's Links folder."""
+    try:
+        import winreg
+        parts = []
+        for hive, sub in ((winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"), (winreg.HKEY_CURRENT_USER, "Environment")):
+            try:
+                with winreg.OpenKey(hive, sub) as k:
+                    parts.append(os.path.expandvars(winreg.QueryValueEx(k, "Path")[0]))
+            except OSError:
+                pass
+        new = [x for x in ";".join(parts).split(";") + [os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links")] if x]
+        cur = os.environ.get("PATH", "").split(";")
+        low = [c.lower() for c in cur]
+        os.environ["PATH"] = ";".join(cur + [x for x in new if x.lower() not in low])
+    except Exception:
+        pass
+
+
+def _fix_worker(what):
+    name, wid, _ = FIXES[what]
+    try:
+        if what == "ytdlp":
+            r = subprocess.run([VPY, "-m", "pip", "install", "-U", "yt-dlp[default]"], cwd=R, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900, creationflags=NOWIN,
+                               env={**os.environ, "CLIPPY_ALLOW_PYPI": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1"})
+        else:
+            if not shutil.which("winget"):
+                raise RuntimeError(f"winget (the Windows installer) was not found. Install {name} yourself, then restart Clippy.")
+            r = subprocess.run(["winget", "install", "-e", "--id", wid, "--silent", "--accept-package-agreements", "--accept-source-agreements"], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=1200, creationflags=NOWIN)
+        out = (r.stdout or "") + (r.stderr or "")
+        refresh_path()
+        ok = r.returncode == 0 or "already installed" in out.lower() or "no available upgrade" in out.lower()
+        FIX.update(state="done" if ok else "failed", msg=f"{name} is installed." if ok else f"Could not install {name}: " + (out.strip().splitlines() or ["unknown error"])[-1][:160])
+    except Exception as e:
+        FIX.update(state="failed", msg=str(e)[:200])
+    _HEALTH["t"] = 0
+
+
+def start_fix(what):
+    if what not in FIXES:
+        raise ValueError("unknown repair")
+    if FIX["state"] == "running":
+        raise RuntimeError("Another repair is already running: wait until it has finished")
+    FIX.update(what=what, state="running", msg="")
+    threading.Thread(target=_fix_worker, args=(what,), daemon=True).start()
+
+
 def health_info():
     """The health check (scripts/health.py), cached for 20 s: the dashboard asks every few seconds."""
     if _HEALTH["v"] is None or time.time() - _HEALTH["t"] > 20:
@@ -1827,12 +1887,18 @@ def health_info():
             c = read_cfg()
             prof = next((p for p in c.get("ai_profiles", []) if p.get("id") == c.get("ai_active")), None)
             have = {"chrome": bool(getattr(__import__("upload"), "CHROME", None)), "browser": getattr(__import__("upload"), "BROWSER_NAME", None), "ffmpeg": bool(_sh.which("ffmpeg")), "ytdlp": bool(importlib.util.find_spec("yt_dlp") or _sh.which("yt-dlp")),
-                    "ai_key": bool(prof and secretstore.exists("key_" + str(prof.get("id"))))}
+                    "js": bool(_sh.which("deno") or _sh.which("node")), "ai_key": bool(prof and secretstore.exists("key_" + str(prof.get("id"))))}
             try:
                 free = _sh.disk_usage(str(R)).free / 1e9
             except OSError:
                 free = None
             items = health.checks(c, signin_state(), update_info(), free, len(waiting_clips()), have, yt_limit_text())
+            for it in items:  # a repair started from here: show it on its own line
+                if FIX["what"] and it["id"] == FIXES[FIX["what"]][2]:
+                    if FIX["state"] == "running":
+                        it.update(level="info", detail="Installing... this can take a minute or two. Clippy checks again by itself.", fix=None)
+                    elif FIX["state"] == "failed" and it["level"] != "ok":
+                        it["detail"] = FIX["msg"]
             _HEALTH["v"] = {"items": items, **health.summary(items)}
         except Exception:
             _HEALTH["v"] = {"items": [], "bad": 0, "warn": 0, "ok": True}

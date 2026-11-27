@@ -1,5 +1,5 @@
 """Health check: is everything Clippy needs in place? Pure logic (the dashboard gathers the facts and passes them in), so it can be tested.
-checks(...) -> [{"id", "level": ok|info|warn|bad, "label", "detail", "fix": None | {"label", "action"}}]   action: signin | update | settings:<element id> | none"""
+checks(...) -> [{"id", "level": ok|info|warn|bad, "label", "detail", "fix": None | {"label", "action"}}]   action: signin | update | cleanup | install:<ffmpeg|ytdlp|browser|deno> | settings:<element id> | none"""
 
 
 def checks(cfg, signin, update, free_gb, waiting, have, yt_limit_until=None, max_waiting=8):
@@ -20,10 +20,12 @@ def checks(cfg, signin, update, free_gb, waiting, have, yt_limit_until=None, max
             add("signin_" + key, "info", f"{name} sign-in not checked yet", "Press Check status in Settings to be sure.", {"label": "Check", "action": "settings:scb"})
     bn = have.get("browser") or "Google Chrome"
     add("chrome", "ok" if have.get("chrome") else "bad", f"{bn} found (used to sign in and upload)" if have.get("chrome") else "No browser found",
-        "" if have.get("chrome") else "Uploading needs Google Chrome or Microsoft Edge (Edge comes with Windows). Install one and restart Clippy.")
+        "" if have.get("chrome") else "Uploading needs Google Chrome or Microsoft Edge (Edge comes with Windows).", None if have.get("chrome") else {"label": "Install Chrome", "action": "install:browser"})
     for k, label in (("ffmpeg", "ffmpeg"), ("ytdlp", "yt-dlp")):
         add(k, "ok" if have.get(k) else "bad", f"{label} found" if have.get(k) else f"{label} not found",
-            "" if have.get(k) else "Run setup.bat to install it.")
+            "" if have.get(k) else "Clippy cannot cut or download videos without it.", None if have.get(k) else {"label": "Install", "action": "install:" + k})
+    if have.get("js") is False:  # yt-dlp needs a JavaScript runtime (Deno or Node.js) to read YouTube
+        add("js", "warn", "No JavaScript runtime for yt-dlp (Deno or Node.js)", "YouTube downloads can fail without one.", {"label": "Install Deno", "action": "install:deno"})
     w = cfg.get("title_writer", "template")
     if w == "api":
         add("ai", "ok" if have.get("ai_key") else "warn", "AI title writer: key saved" if have.get("ai_key") else "AI title writer has no key saved",
@@ -35,7 +37,7 @@ def checks(cfg, signin, update, free_gb, waiting, have, yt_limit_until=None, max
     if free_gb is not None:
         add("disk", "bad" if free_gb < 3 else "warn" if free_gb < 10 else "ok", f"{free_gb:.0f} GB free on this drive",
             "Very low: runs will fail." if free_gb < 3 else "Getting low: use Clean up now in Settings." if free_gb < 10 else "",
-            {"label": "Clean up", "action": "settings:keep_clips_days"} if free_gb < 10 else None)
+            {"label": "Clean up now", "action": "cleanup"} if free_gb < 10 else None)
     if waiting >= max_waiting:
         add("waiting", "info", f"{waiting} clips are waiting for you", "Autopilot stops preparing new clips while this many wait. Look at them: rate each one (👍, 😐 or 👎), then post, schedule or remove it.")
     if update and update.get("available"):

@@ -1018,13 +1018,14 @@ def _main():
     skip_ids = set(st["used_video_ids"]) | set(st["rejected"]) | review_ids()
     # 0) Twitch first: clips the streamers' own audiences made (already picked by viewers), from every streamer on the list plus trending, most viewed first
     tw_only = cfg.get("twitch_clips") == "only"  # Settings: only Twitch clips (made by viewers), no YouTube videos
+    tw_off = cfg.get("twitch_clips") == "off"  # Settings: only YouTube videos, no Twitch clips at all
     tw_period = {"month": "LAST_MONTH", "all": "ALL_TIME"}.get(cfg.get("twitch_period"), "LAST_WEEK")
     try:
         tw_per = max(3, min(15, int(cfg.get("twitch_per_streamer", 6) or 6)))
     except (TypeError, ValueError):
         tw_per = 6
     pool = []
-    for creator in creators[:10]:
+    for creator in ([] if tw_off else creators[:10]):
         try:
             pool += [(c, creator) for c in creator_twitch_clips(creator, skip_ids, tw_per, tw_period)]
         except Exception as e:
@@ -1043,7 +1044,7 @@ def _main():
         code = flush(a.dry)  # good moments, none great: cut the best of them before looking at YouTube at all
         if code is not None:
             return code
-    if cfg.get("twitch_priority") and not tw_only:  # Settings: prioritize viewer-made Twitch clips: the topic's most viewed Twitch clips (any streamer) are looked at BEFORE any YouTube video
+    if cfg.get("twitch_priority") and not tw_only and not tw_off:  # Settings: prioritize viewer-made Twitch clips: the topic's most viewed Twitch clips (any streamer) are looked at BEFORE any YouTube video
         extra = [v for v in search_twitch_clips(skip_ids) if v["id"] not in seen and (a.only is None or v["id"] == a.only)]
         if extra:
             seen |= {v["id"] for v in extra}
@@ -1076,7 +1077,7 @@ def _main():
         log("trending: looking at what is popular " + ("right now (any topic)" if TP["any"] else "for " + TP["name"]))
         skip_ch |= {norm(c) for c in creators}  # those were already tried above
         skip_ids = skip_ids - ({a.only} if a.only else set())
-        vids = search_twitch_clips(skip_ids) + ([] if tw_only else search_trending(skip_ch, skip_ids))  # viewer-made Twitch clips first (already picked by viewers)
+        vids = ([] if tw_off else search_twitch_clips(skip_ids)) + ([] if tw_only else search_trending(skip_ch, skip_ids))  # viewer-made Twitch clips first (already picked by viewers)
         vids = [v for v in vids if v["id"] not in seen]  # the Twitch clips above were already judged
         vids = [v for v in vids if v["id"] == a.only] if a.only else vids
         log(f"  {len(vids)} trending candidates: " + ", ".join(v["channel"] for v in vids))
