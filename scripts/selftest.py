@@ -1282,6 +1282,36 @@ def test_scheduled_posts_have_a_windows_task_only_while_something_is_scheduled()
         d.REVIEW = keep
 
 
+def test_clip_edges_dead_moments_slow_openings_and_mid_sentence_cuts():
+    import json, tempfile
+    import pick_rules as P
+    quiet = [0] * 40 + [1] * 5                                   # a quiet streamer driving, then one second of talk
+    assert "nothing" in P.dead_moment(quiet, 0, 36) or "only" in P.dead_moment(quiet, 0, 36)
+    assert P.dead_moment([1] * 30, 0, 30) is None                # speech all the way: fine
+    assert P.dead_moment([1] * 10 + [0] * 7 + [1] * 13, 0, 30) is not None   # 7 s of nothing in a row, even though 77% is alive
+    assert P.dead_moment([1, 1, 0, 1, 1, 1, 0, 1, 1, 1] * 3, 0, 30) is None  # short pauses are fine
+    al = [0] * 5 + [1] * 30
+    assert P.fix_opening(al, 0, 30, 15)[0] == 4.0 or P.fix_opening(al, 0, 30, 15)[0] == 5.0   # a 5 s quiet opening is cut off
+    assert P.fix_opening([0] * 30, 0, 30, 15)[0] is None         # nothing ever starts: skip it
+    assert P.fix_opening([1] * 30, 2, 30, 15) == (2, None)       # a lively opening stays as it is
+    w = [{"w": "so", "s": 10.0, "e": 10.2}, {"w": "he", "s": 10.2, "e": 10.4}, {"w": "walks", "s": 10.4, "e": 10.8}, {"w": "in.", "s": 10.8, "e": 11.1},
+         {"w": "And", "s": 12.0, "e": 12.2}, {"w": "then", "s": 12.2, "e": 12.5}, {"w": "he", "s": 12.5, "e": 12.7}, {"w": "falls", "s": 12.7, "e": 13.2}, {"w": "down.", "s": 13.2, "e": 13.7}]
+    s, e, notes = P.snap_to_speech(w, 12.3, 13.0, 1, 30)          # starts at "then", stops inside "falls"
+    assert s < 12.0 and e >= 13.7 and any("sentence" in n for n in notes)   # the whole sentence "And then he falls down."
+    s, e, _ = P.snap_to_speech(w, 10.5, 11.1, 1, 30)             # starts inside "walks": the sentence begins at "so"
+    assert s < 10.0
+    assert P.snap_to_speech(w, 9.9, 11.2, 1, 30)[:2] == (9.9, 11.2)   # already on sentence edges: unchanged
+    assert P.snap_to_speech([], 1.0, 20.0, 5, 30) == (1.0, 20.0, [])  # no transcript: nothing happens
+    # the gate itself (autorun._edge_gate) reads alive.json + transcript.json of the job
+    d = Path(tempfile.mkdtemp()); (d / "alive.json").write_text(json.dumps({"alive": [0] * 60}), encoding="utf-8")
+    c, cr, notes, why = autorun._edge_gate(d, {"start": 5.0, "end": 35.0}, [])
+    assert why and "quiet" in why or why                          # a fully dead window is refused
+    (d / "alive.json").write_text(json.dumps({"alive": [1] * 60}), encoding="utf-8"); (d / "transcript.json").write_text(json.dumps(w), encoding="utf-8")
+    c, cr, notes, why = autorun._edge_gate(d, {"start": 12.3, "end": 13.0 + 8}, [])
+    assert why is None and c["start"] < 12.0 and cr[:1] == ["--start"]   # tidied and the cut range follows
+    assert autorun._edge_gate(Path(tempfile.mkdtemp()), {"start": 5.0, "end": 35.0}, ["x"])[1:] == (["x"], [], None)   # no map and no transcript: untouched
+
+
 def test_clips_that_are_silent_for_long_stretches_fail_the_check():
     import sys, subprocess, tempfile
     sys.path.insert(0, str(Path(__file__).resolve().parent))

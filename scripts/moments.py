@@ -335,6 +335,10 @@ def main():
     for w in words:
         speaking[max(0, int(w["s"])):min(n, int(w["e"]) + 1)] = 1
     speaking = smooth(speaking, 3) > 0  # someone is talking (short pauses between words and sentences do not count as silence)
+    # one 0/1 per second: is anything going on (speech, a loud jump, an excited voice, laughter, swearing, real action)? autorun uses it to refuse dead moments (a quiet streamer
+    # driving / walking / in a menu) and clips that open slowly (pick_rules.dead_moment / fix_opening)
+    alive = speaking | (loud > 0.8) | (voice > 0.6) | (laugh > 0.3) | (swear > 0.3) | (motion > 3.0)
+    save_json(d / "alive.json", {"alive": [int(x) for x in alive]})
     # weights: what the voice does and what happens on screen matter most; fast talking alone (mission chatter) barely counts
     score = (w_loud * loud + 0.4 * PR.cap_z(z(hype), True) + 0.8 * motion + w_heat * PR.cap_z(z(heat), True) + w_chat * chatz
              + 1.5 * voice + 0.8 * laugh + 0.8 * swear + 0.7 * novel + 0.15 * rate_z + 0.8 * drama)

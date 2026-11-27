@@ -186,3 +186,101 @@ def wilson(k, n, z=1.96):
     centre = (p + z * z / (2 * n)) / c
     half = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / c
     return (max(0.0, centre - half), min(1.0, centre + half))
+
+
+# ---- clip edges (2026-11-27): no dead moments, an opening that starts, cuts on sentence boundaries ---------------------------------------------------------------
+# moments.py saves alive.json (one 0/1 per second: someone is speaking, or a loud jump, an excited voice, laughter, swearing or real action). These rules read it.
+ALIVE_MIN_SHARE = 0.70   # at least 70% of the seconds of a clip must be alive
+MAX_DEAD_RUN = 6.0       # no stretch of this many seconds in a row with nothing happening
+OPEN_SECONDS, OPEN_MIN_ALIVE = 3, 2   # the first 3 seconds need 2 alive ones
+SENT_GAP = 0.7           # a pause this long between two words ends a sentence, like . ! ?
+EDGE_MAX_EARLIER, EDGE_MAX_LATER = 4.0, 3.0   # how far an edge may move to reach a sentence boundary
+
+
+def alive_stats(alive, start, end):
+    """(share of alive seconds, longest run of dead seconds) of the window [start, end) in a per-second 0/1 list."""
+    a = [1 if x else 0 for x in alive[max(0, int(start)):max(0, int(end + 0.999))]]
+    if not a:
+        return 1.0, 0.0
+    run = best = 0
+    for x in a:
+        run = 0 if x else run + 1
+        best = max(best, run)
+    return sum(a) / len(a), float(best)
+
+
+def dead_moment(alive, start, end):
+    """None when the window is alive enough, else a plain reason (the streamer is quiet and nothing happens: driving, walking, a menu)."""
+    share, run = alive_stats(alive, start, end)
+    if share < ALIVE_MIN_SHARE:
+        return f"only {share:.0%} of it has speech, a reaction or action"
+    if run >= MAX_DEAD_RUN:
+        return f"{run:.0f} seconds in a row with nothing happening"
+    return None
+
+
+def fix_opening(alive, start, end, min_len):
+    """(new_start, note): the first 3 seconds must start something. When they do not, the clip starts at the first alive second instead (at most 8 s later and only while
+    min_len remains). (None, reason) = skip this moment."""
+    s = int(start)
+    if sum(1 if x else 0 for x in alive[s:s + OPEN_SECONDS]) >= OPEN_MIN_ALIVE or s >= len(alive):
+        return start, None
+    for t in range(s + 1, min(int(end) - 1, s + 9)):
+        if sum(1 if x else 0 for x in alive[t:t + OPEN_SECONDS]) >= OPEN_MIN_ALIVE:
+            if end - t >= min_len:
+                return float(t), f"slow start cut off ({t - start:.0f} s)"
+            break
+    return None, "the first seconds are quiet and nothing starts"
+
+
+def _sentence_end(words, i):
+    """True when a sentence ends after words[i]: . ! ? at the end of it, a pause of 0.7 s or more, or it is the last word."""
+    t = words[i]["w"].strip()
+    return t[-1:] in ".!?" or i + 1 >= len(words) or words[i + 1]["s"] - words[i]["e"] >= SENT_GAP
+
+
+def snap_to_speech(words, start, end, min_len, max_len, dur=None):
+    """Move the edges of a clip to speech boundaries: never inside a word, and not in the middle of a sentence (starting at 'and then he...' or stopping at 'so I was like').
+    Returns (start, end, notes). The start moves to the beginning of its sentence (at most 4 s earlier, else the next sentence at most 3 s later), the end to the end of its
+    sentence (at most 4 s later, else back to the previous sentence end); the length always stays within [min_len, max_len]."""
+    notes = []
+    if not words:
+        return start, end, notes
+    n = len(words)
+    i = next((k for k in range(n) if words[k]["e"] > start), None)  # first word that is not over before the start
+    if i is not None and words[i]["s"] < end:
+        if words[i]["s"] < start:                                   # inside a word: begin at its first letter
+            ns = max(0.0, words[i]["s"] - 0.1)
+            if end - ns <= max_len:
+                start = ns; notes.append("start moved out of a word")
+        if i > 0 and not _sentence_end(words, i - 1) and words[i]["s"] - start < 0.6:   # in the middle of a sentence
+            k = i
+            while k > 0 and not _sentence_end(words, k - 1):
+                k -= 1
+            ns = max(0.0, words[k]["s"] - 0.1)
+            if start - ns <= EDGE_MAX_EARLIER and end - ns <= max_len:
+                start = ns; notes.append("start moved to the beginning of the sentence")
+            else:
+                m = i
+                while m < n and not _sentence_end(words, m - 1):
+                    m += 1
+                if m < n and words[m]["s"] - 0.1 - start <= EDGE_MAX_LATER and end - (words[m]["s"] - 0.1) >= min_len:
+                    start = words[m]["s"] - 0.1; notes.append("start moved to the next sentence")
+    j = next((k for k in range(n - 1, -1, -1) if words[k]["s"] < end), None)   # last word that starts before the end
+    if j is not None and words[j]["e"] > start:
+        if words[j]["e"] > end:                                     # inside a word: finish it
+            ne = words[j]["e"] + 0.25
+            if ne - start <= max_len and (dur is None or ne <= dur):
+                end = ne; notes.append("end moved out of a word")
+        if not _sentence_end(words, j) and words[j + 1]["s"] - words[j]["e"] < 0.8:     # the sentence carries on after the end
+            m = j
+            while m < n - 1 and not _sentence_end(words, m):
+                m += 1
+            ne = words[m]["e"] + 0.3
+            if ne - end <= EDGE_MAX_EARLIER and ne - start <= max_len and (dur is None or ne <= dur):
+                end = ne; notes.append("end moved to the end of the sentence")
+            else:
+                p = next((k for k in range(j - 1, -1, -1) if _sentence_end(words, k)), None)
+                if p is not None and words[p]["e"] + 0.3 - start >= min_len:
+                    end = words[p]["e"] + 0.3; notes.append("end moved back to the end of the previous sentence")
+    return round(start, 2), round(end, 2), notes

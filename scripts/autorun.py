@@ -508,6 +508,40 @@ def _est(st):
     return (sum(ai) / len(ai) if ai else PR.no_ai_baseline(st["score"])) - PR.total_penalty(st["pen"]) + st["score"] * 0.3 + st["bonus"]
 
 
+def _edge_gate(job, c, cut_range):
+    """The clip's edges (rules in pick_rules.py): the first 3 seconds must start something, the cut falls on sentence boundaries (never in a word or mid-sentence), and the clip
+    has no dead stretch (a quiet streamer driving / walking / in a menu). Returns (c, cut_range, notes, reason): reason set = skip this moment. Without the per-second map
+    (alive.json, written by moments.py) or the transcript the matching rule is simply not applied."""
+    try:
+        al = json.loads((job / "alive.json").read_text(encoding="utf-8"))["alive"]
+    except Exception:
+        al = None
+    try:
+        words = json.loads((job / "transcript.json").read_text(encoding="utf-8"))
+    except Exception:
+        words = []
+    s0, e0, notes = float(c["start"]), float(c["end"]), []
+    if al:
+        ns, why = PR.fix_opening(al, s0, e0, LIMITS[0])
+        if ns is None:
+            return c, cut_range, notes, why
+        if why:
+            notes.append(why); s0 = ns
+    if words:
+        s0, e0, more = PR.snap_to_speech(words, s0, e0, LIMITS[0], LIMITS[1], float(len(al)) if al else None)
+        notes += more
+    if al:
+        why = PR.dead_moment(al, s0, e0)
+        if why:
+            return c, cut_range, notes, why
+    if notes and (abs(s0 - float(c["start"])) > 0.05 or abs(e0 - float(c["end"])) > 0.05):
+        c = {**c, "start": s0, "end": e0}
+        if words:
+            c["text"] = " ".join(w["w"] for w in words if s0 <= w["s"] < e0)[:400]
+        cut_range = ["--start", f"{s0:.2f}", "--end", f"{e0:.2f}"]
+    return c, cut_range, notes, None
+
+
 def _stage2(v, job, st):
     """Stage 2: the AI frame look / visual check, snapping to a scene cut, the final rank. Returns None or what the cut needs."""
     pen, c, cut_range, win, bonus, win_score, score, strict = (st[k] for k in ("pen", "c", "cut_range", "win", "bonus", "win_score", "score", "strict"))
@@ -557,6 +591,15 @@ def _stage2(v, job, st):
             c = {**c, "start": ns}; cut_range = ["--start", f"{ns:.2f}", "--end", f"{c['end']:.2f}"]
     except Exception:
         pass
+    edge_notes = []
+    try:
+        c, cut_range, edge_notes, bad = _edge_gate(job, c, cut_range)
+        if bad:
+            log(f"  clip edges: skipping ({bad})"); return None
+        for nt in edge_notes:
+            log(f"  clip edges: {nt}")
+    except Exception as e:
+        log(f"  clip edge rules not possible ({str(e)[:60]})")
     caps, caps_share = False, 0.0
     try:  # the source already has burned-in subtitles (a streamer's clip editor, a clipper): Clippy does not add its own on top of them
         import caption_check
@@ -582,6 +625,7 @@ def _stage2(v, job, st):
             "seconds": round(dur_, 1), "twitch": 1 if v.get("twitch") else 0, "live": 1 if ORIGIN == "live" else 0, "nonen": _nonen(job), "views_log": round(__import__("math").log10((v.get("views") or 0) + 1), 2),
             "wps": round(len(str(c.get("text") or "").split()) / dur_, 2), "channel": v.get("channel"), "source_captions": caps_share,  # more for the learning: length, source, popularity, speech speed, which streamer
             "notes": [f"-{p:g} {w}" for p, w in pen] + [f"+{p:g} {w}" for p, w in bonus_notes], "bit": (win or {}).get("why"), "kind": (win or {}).get("kind"), "quote": (win or {}).get("quote"), "what": (win or {}).get("what"), "funny": (win or {}).get("funny") or (win or {}).get("funny_event"), "interesting": (win or {}).get("interesting"), "scene": scene}  # notes/bit/scene: shown in the dashboard score tooltip
+    feat["edge"] = edge_notes
     if fa:
         feat["notes"].append(f"{fa:+g} the picture scored {res_score:g}/10")
     if la:
