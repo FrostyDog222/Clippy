@@ -438,14 +438,19 @@ def log_text(limit=2500, run_limit=1500):
             t = raw.decode("utf-8", errors="replace").replace(chr(0), "")
             i = t.rfind("live watcher started")
             return t[max(0, i - 9):][-limit:] if i >= 0 else t[-limit:]
-        if not LOG.exists():
-            return ""
-        raw = LOG.read_bytes()
-        try:
-            raw = raw[int((R / "run_log_mark.txt").read_text()):]  # "Clear log" moves this mark: the post history file itself is never emptied
-        except (OSError, ValueError):
-            pass
-        return raw.decode("utf-8", errors="replace")[-run_limit:]
+        # the run's own log (autorun.log: every step of the search, the checks and the cut, as it happens) first, then the last few posts from the post history
+        rl = R / "autorun.log"
+        run = rl.read_bytes().decode("utf-8", errors="replace").replace(chr(0), "") if rl.exists() else ""
+        run = "\n".join(x for x in run.splitlines() if not x.startswith("[ WARN"))[-run_limit:]
+        posts = ""
+        if LOG.exists():
+            raw = LOG.read_bytes()
+            try:
+                raw = raw[int((R / "run_log_mark.txt").read_text()):]  # "Clear log" moves this mark: the post history file itself is never emptied
+            except (OSError, ValueError):
+                pass
+            posts = "\n".join(raw.decode("utf-8", errors="replace").splitlines()[-4:]).strip()
+        return (run + ("\n\nLast posts:\n" + posts if posts else "")).strip()
     except OSError:
         return ""
 
