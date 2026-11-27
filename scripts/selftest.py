@@ -1464,6 +1464,16 @@ def test_health_repair_buttons_run_the_right_installer():
         d._HEALTH["t"] = 0
 
 
+def test_only_one_live_watcher_can_run():
+    import live_watch, os
+    assert live_watch.pid_alive(os.getpid()) and not live_watch.pid_alive(4000000)  # a running process vs one that does not exist
+    import dashboard as d
+    f = Path(__import__("tempfile").mkdtemp()) / "w.pid"
+    assert not d._pid_alive(f)
+    f.write_text(str(os.getpid())); assert d._pid_alive(f)
+    f.write_text("4000000"); assert not d._pid_alive(f)
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

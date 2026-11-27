@@ -562,12 +562,27 @@ def live_status():
         return None
 
 
+def _pid_alive(f):
+    """Is the process whose id is in this file still running? (the live watcher writes live_watch.pid)"""
+    try:
+        import ctypes
+        h = ctypes.windll.kernel32.OpenProcess(0x100000, False, int(pathlib.Path(f).read_text()))
+        if not h:
+            return False
+        try:
+            return ctypes.windll.kernel32.WaitForSingleObject(h, 0) == 0x102
+        finally:
+            ctypes.windll.kernel32.CloseHandle(h)
+    except Exception:
+        return False
+
+
 def live_loop():
     """Keeps the live watcher process running while the switch is ON (it exits by itself when switched off)."""
     while True:
         time.sleep(20)
         try:
-            if read_cfg().get("live_watch") and not PAUSE.exists() and (_live["p"] is None or _live["p"].poll() is not None) and not live_status():
+            if read_cfg().get("live_watch") and not PAUSE.exists() and (_live["p"] is None or _live["p"].poll() is not None) and not live_status() and not _pid_alive(R / "live_watch.pid"):
                 _live["p"] = subprocess.Popen([BGPY, "scripts/live_watch.py"], cwd=R, creationflags=NOWIN,
                                               stdout=open(R / "live_watch.log", "a", encoding="utf-8"), stderr=subprocess.STDOUT)
         except Exception:

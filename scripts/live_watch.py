@@ -272,6 +272,21 @@ def write_progress(watches, posted, want, last, prepare_only, done=False):
         pass
 
 
+PIDF = R / "live_watch.pid"
+
+
+def pid_alive(pid):
+    """Is a process with this id still running (Windows)? Used so two live watchers never run at the same time."""
+    import ctypes
+    h = ctypes.windll.kernel32.OpenProcess(0x100000, False, int(pid))  # SYNCHRONIZE
+    if not h:
+        return False
+    try:
+        return ctypes.windll.kernel32.WaitForSingleObject(h, 0) == 0x102  # still running
+    finally:
+        ctypes.windll.kernel32.CloseHandle(h)
+
+
 def write_status(watches, queue, posted, last):
     STATUS.write_text(json.dumps({"ts": dt.datetime.now().isoformat(timespec="seconds"), "queued": len(queue), "posted": posted, "last": last,
                                   "watching": [{"platform": w.s["platform"], "channel": w.s["channel"], "title": w.s["title"][:80], "url": w.url,
@@ -287,6 +302,14 @@ def main():
         for s in discover(cfg):
             print(f"{s['platform']:8} {s.get('viewers') or '':>7}  {'*' if s['creator'] else ' '} {s['channel'][:24]:24} {s['title'][:60]}")
         return 0
+    try:  # one live watcher at a time: a second one (for example one left over from before a dashboard restart) would record the same streams twice and could post twice
+        old = int(PIDF.read_text())
+    except (OSError, ValueError):
+        old = 0
+    if old and old != os.getpid() and pid_alive(old):
+        log(f"another live watcher is already running (process {old}): this one stops")
+        return 0
+    PIDF.write_text(str(os.getpid()))
     autorun.configure(cfg); autorun.ORIGIN = "live"
     try:  # same rule as a normal run: yt-dlp is checked for updates before the watcher starts
         import update_ytdlp
@@ -296,6 +319,7 @@ def main():
     watches, queue, cooldown, posted, last, next_find = [], [], {}, 0, "starting", 0.0
     made_by = {}  # prepare-only: clips made per streamer in this session
     log("live watcher started")
+    write_status([], [], 0, "starting")  # the dashboard shows "Starting..." only until this first status
     try:
         while True:
             cfg = cfg_now()
