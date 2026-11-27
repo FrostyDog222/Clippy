@@ -65,6 +65,8 @@ h1.hello{font-size:36px;font-weight:800;margin:0;letter-spacing:-.6px;line-heigh
 .btn.bad{color:#ff8497;border-color:rgba(255,107,129,.5)}.btn.bad:hover:not(:disabled){border-color:var(--bad);box-shadow:0 0 0 3px rgba(255,107,129,.18)}
 .runbtns{margin-top:20px;position:relative;z-index:1}
 .hint{color:var(--mut);font-size:13px;margin-top:10px}
+.kl{display:inline-block;margin-left:8px;padding:1px 9px 1px 7px;border-radius:99px;font-size:12px;font-weight:600;border:1px solid currentColor}.kl:before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:currentColor;margin-right:6px}
+.kl.g{color:#3ddc84}.kl.r{color:#ff5d6c}.kl.y{color:#ffc247}.kl.w{color:var(--mut)}
 #runlog{display:none;margin:14px 0 0;max-height:300px;overflow:auto;background:rgba(7,4,18,.82);border:1px solid var(--line);border-radius:14px;padding:14px 16px;font:12.5px/1.55 ui-monospace,Consolas,monospace;white-space:pre-wrap;color:#cfc8f5;position:relative;z-index:1}
 .mimg{background:var(--mascot) center/contain no-repeat}
 .mascot{position:absolute;right:20px;top:30px;width:190px;height:190px;pointer-events:none}
@@ -284,7 +286,7 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:p
       <div class="r2"><label class="f"><span>Profile name</span><input type="text" id="p_name" placeholder="Gemini"></label>
       <label class="f"><span>API address</span><input type="text" id="p_url" placeholder="https://generativelanguage.googleapis.com/v1beta/openai"></label></div>
       <label class="f"><span>Model <b id="mcount" style="color:var(--mut);font-weight:400"></b></span><div style="display:flex;gap:8px"><input type="text" id="p_model" list="modellist" placeholder="type, or press Load models and pick"><datalist id="modellist"></datalist><button class="btn" type="button" onclick="loadModels()">Load models</button></div></label>
-      <label class="f"><span>API key <b id="keystat" style="color:var(--mut);font-weight:400"></b></span><div style="display:flex;gap:8px"><input type="password" id="title_key" placeholder="paste key, then press Save key" autocomplete="off"><button class="btn" type="button" onclick="saveKey()">Save key</button></div>
+      <label class="f"><span>API key <b id="keystat" style="color:var(--mut);font-weight:400"></b><b id="keylight" class="kl w">Not checked</b></span><div style="display:flex;gap:8px"><input type="password" id="title_key" placeholder="paste key, then press Save key" autocomplete="off"><button class="btn" type="button" onclick="saveKey()">Save key</button></div>
       <small>Warning: the clip transcript, the source video title and 3 frames of each clip (frame check) are sent to the provider you choose. The key is stored only on this PC (api_tokens folder) and never shown again. Leave it empty for a local model that needs no key. Use https:// (http:// only for localhost).</small></label>
       <div class="btns"><button class="btn pri" type="button" onclick="testAI()">Test this model</button></div><div id="aitest" class="hint"></div>
     </div>
@@ -410,7 +412,26 @@ function addC(v){v.split(/[\n,]/).map(s=>s.trim()).filter(Boolean).forEach(n=>{i
 function rmC(i){draft.creators.splice(i,1);renderChips();chg()}
 let srvKeys={};
 function prof(){return (draft.ai_profiles||[]).find(p=>p.id===draft.ai_active)}
-function keyst(){const p=prof();$('keystat').textContent=p&&srvKeys[p.id]?'(a key is saved)':'(no key saved)'}
+function keyst(){const p=prof();$('keystat').textContent=p&&srvKeys[p.id]?'(a key is saved)':'(no key saved)';keyLight();const a=document.activeElement;if(!a||(a.id!=='p_model'&&a.id!=='p_url'))checkProf()}
+// Status light next to the key: green = the model answered, red = key/model/address rejected, yellow = needs attention (no key, no model, busy or out of quota).
+const AIST={};
+const aiLocal=p=>/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])/i.test(p.url||'');
+const aiK=p=>[p.id,p.url,p.model,!!srvKeys[p.id]].join('|');
+function light(c,t,tip){const e=$('keylight');e.className='kl '+c;e.textContent=t;e.title=tip||''}
+function aiReady(p){if(!p.url)return'Fill in the API address';if(!srvKeys[p.id]&&!aiLocal(p))return'No key saved yet: paste it and press Save key';if(!p.model)return'Pick a model (press Load models)';return''}
+function keyLight(){const p=prof();if(!p)return;const why=aiReady(p);if(why)return light('y','Needs attention',why);const s=AIST[aiK(p)];if(!s)return light('w','Not checked','Press Test this model');light(s.c,s.t,s.tip)}
+function aiVerdict(j){if(j.ok)return{c:'g',t:'Working',tip:'Answered in '+j.ms+' ms'};const e=String(j.error||'');
+if(/429|quota|rate.?limit|overload|503|502|unavailable|busy|timed? ?out|exhaust/i.test(e))return{c:'y',t:'Needs attention',tip:'The key looks fine but the provider is busy or the quota is used up: '+e};
+if(/404|not found|no such model|does not exist/i.test(e))return{c:'r',t:'Model not found',tip:e};
+if(/401|403|unauthor|invalid|api.?key|permission|denied|forbidden|credential/i.test(e))return{c:'r',t:'Key rejected',tip:e};
+return{c:'r',t:'Not working',tip:e||'no answer'}}
+async function runTest(p){const k=aiK(p);AIST[k]={c:'w',t:'Checking...'};keyLight();const r=await fetch('/api/aitest',{method:'POST',body:JSON.stringify({id:p.id,url:p.url,model:p.model})});const j=await r.json().catch(()=>({}));AIST[k]=aiVerdict(j);if(prof()===p)keyLight();return j}
+function checkProf(){const p=prof();if(!p||aiReady(p)||AIST[aiK(p)])return;runTest(p)}
+// the best model to start with from a provider's list: a fast, current text model (not embeddings, speech, images...)
+function bestModel(l){const ok=l.filter(m=>!/embed|tts|image|audio|whisper|moderation|dall|imagen|veo|robotics|aqa|transcribe|realtime|live|guard/i.test(m));
+const stable=m=>!/preview|exp|lite|latest|-\d{4}-\d\d-\d\d$/i.test(m);for(const rx of [/flash/i,/mini/i,/haiku/i,/sonnet/i,/gpt|llama|qwen|gemma/i]){const c=ok.filter(m=>rx.test(m)).sort().reverse();const s=c.find(stable)||c[0];if(s)return s}return ok[0]||l[0]||''}
+// a provider from the first letters of its key, so the address can be filled in by itself
+function keyHost(k){return/^AIza/.test(k)?'https://generativelanguage.googleapis.com/v1beta/openai':/^sk-ant-/.test(k)?'https://api.anthropic.com/v1':/^sk-or-/.test(k)?'https://openrouter.ai/api/v1':/^gsk_/.test(k)?'https://api.groq.com/openai/v1':/^sk-/.test(k)?'https://api.openai.com/v1':''}
 function renderProf(){const ps=draft.ai_profiles=draft.ai_profiles||[];$('ai_active').innerHTML=ps.map(p=>'<option value="'+esc(p.id)+'"'+(p.id===draft.ai_active?' selected':'')+'>'+esc(p.name)+' ('+esc(p.model||'no model')+')</option>').join('')||'<option value="">No profile yet: press New</option>';
 const opts='<option value="">Selected profile</option>'+ps.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.name)+' ('+esc(p.model||'no model')+')</option>').join('');
 ['ai_check_profile','ai_title_profile'].forEach(k=>{$(k).innerHTML=opts;$(k).value=draft[k]||''});
@@ -420,10 +441,13 @@ async function delProf(){const p=prof();if(!p||!await ask('Delete profile "'+p.n
 ['ai_check_profile','ai_title_profile'].forEach(k=>$(k).onchange=e=>{draft[k]=e.target.value;chg()});
 $('ai_active').onchange=e=>{draft.ai_active=e.target.value;renderProf();chg()};
 ['name','url','model'].forEach(k=>$('p_'+k).addEventListener('input',e=>{const p=prof();if(p){p[k]=e.target.value;chg()}}));
-async function loadModels(){const p=prof();if(!p)return;$('mcount').textContent='(loading...)';const r=await fetch('/api/models',{method:'POST',body:JSON.stringify({id:p.id,url:p.url})});
-const j=await r.json().catch(()=>({}));if(j.models){$('modellist').innerHTML=j.models.map(m=>'<option value="'+esc(m)+'">').join('');$('mcount').textContent='('+j.models.length+' found: click the box to pick)'}else{$('mcount').textContent='(could not load: '+(j.error||'save the key first, check the address')+')'}}
-async function testAI(){const p=prof();if(!p)return;$('aitest').textContent='Testing...';const r=await fetch('/api/aitest',{method:'POST',body:JSON.stringify({id:p.id,url:p.url,model:p.model})});const j=await r.json().catch(()=>({}));
+// auto: also pick a model by itself when none is set or the set one is not in the provider's list
+async function loadModels(auto){const p=prof();if(!p||!p.url)return;$('mcount').textContent='(loading...)';const r=await fetch('/api/models',{method:'POST',body:JSON.stringify({id:p.id,url:p.url})});
+const j=await r.json().catch(()=>({}));if(j.models){$('modellist').innerHTML=j.models.map(m=>'<option value="'+esc(m)+'">').join('');$('mcount').textContent='('+j.models.length+' found: click the box to pick)';
+if(auto===true&&j.models.length&&!j.models.includes(p.model)){const was=p.model;p.model=bestModel(j.models);$('p_model').value=p.model;$('mcount').textContent='('+j.models.length+' found, picked '+p.model+(was?' because "'+was+'" is not offered':'')+')';chg();renderProf()}}else{$('mcount').textContent='(could not load: '+(j.error||'save the key first, check the address')+')'}return j}
+async function testAI(){const p=prof();if(!p)return;$('aitest').textContent='Testing...';const j=await runTest(p);
 $('aitest').textContent=j.ok?'Works: answered "'+j.text+'" in '+j.ms+' ms':'Failed: '+(j.error||'no answer')}
+['url','model'].forEach(k=>$('p_'+k).addEventListener('change',async()=>{const p=prof();if(!p)return;if(k==='url'&&p.url&&(srvKeys[p.id]||aiLocal(p)))await loadModels(true);checkProf()}));
 const LANGSET=window.LANGSET={};
 function renderLangs(){const sel=draft.languages=Array.isArray(draft.languages)?draft.languages:(draft.languages==='any'?[]:[draft.languages||'en']);
 let o='<span class="chip opt '+(sel.length?'':'sel')+'" onclick="pickLang(\'\')">Any language</span>';
@@ -514,7 +538,10 @@ NUM.concat(TXT).forEach(k=>$(k).addEventListener('input',e=>{draft[k]=e.target.v
 document.querySelectorAll('#mode button').forEach(b=>b.onclick=()=>{draft.creator_mode=b.dataset.v;renderMode();chg()});
 function discard(){draft=JSON.parse(JSON.stringify(srv));fill();chg()}
 async function save(){const r=await fetch('/api/config',{method:'POST',body:JSON.stringify(draft)});if(r.ok){toast('Settings saved');await load(true)}else toast(await r.text(),1)}
-async function saveKey(){const p=prof();if(!p)return;const k=$('title_key').value;const r=await fetch('/api/aikey',{method:'POST',body:JSON.stringify({id:p.id,key:k})});$('title_key').value='';toast(r.ok?(k?'Key saved':'Key removed'):'Could not save the key',!r.ok);load()}
+async function saveKey(){const p=prof();if(!p)return;const k=$('title_key').value.trim();if(k&&!p.url){const h=keyHost(k);if(h){p.url=h;$('p_url').value=h;chg()}}
+const r=await fetch('/api/aikey',{method:'POST',body:JSON.stringify({id:p.id,key:k})});$('title_key').value='';toast(r.ok?(k?'Key saved':'Key removed'):'Could not save the key',!r.ok);
+if(!r.ok)return;srvKeys[p.id]=!!k;keyst();
+if(k){await loadModels(true);const q=prof();if(q&&!aiReady(q))runTest(q)}load()}
 async function post(u){const r=await fetch(u,{method:'POST'});if(!r.ok){const t=await r.text();r.status==409?tell(t):toast(t,1)}else if(u=='/api/quit'){quitPage();return}load()}
 // After Quit: the page closes itself. A browser only lets a script close a tab it opened itself, so when that is refused a plain "closed" page replaces the dashboard instead of a dead one.
 function quitPage(){window.QUIT=true;try{window.open('','_self');window.close()}catch(e){}
