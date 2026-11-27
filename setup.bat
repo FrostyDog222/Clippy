@@ -66,11 +66,14 @@ goto jsrt_done
 echo [OK] JavaScript runtime found
 :jsrt_done
 
-rem ---- 4. Chrome ----
+rem ---- 4. Browser (Google Chrome, or Microsoft Edge which every Windows 10 / 11 PC already has) ----
 set CHROME=
-if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" set CHROME=1
-if exist "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" set CHROME=1
-if defined CHROME (echo [OK] Google Chrome found) else echo [!!] Google Chrome not found: install it from https://www.google.com/chrome/
+if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" set CHROME=Google Chrome
+if exist "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" set CHROME=Google Chrome
+if not defined CHROME if exist "%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe" set CHROME=Google Chrome
+if not defined CHROME if exist "%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe" set CHROME=Microsoft Edge
+if not defined CHROME if exist "%ProgramFiles%\Microsoft\Edge\Application\msedge.exe" set CHROME=Microsoft Edge
+if defined CHROME (echo [OK] %CHROME% found) else echo [!!] No browser found: install Google Chrome from https://www.google.com/chrome/ (Microsoft Edge also works)
 
 rem ---- 5. Claude CLI (only for the "Claude in Chrome" upload method) ----
 where claude >nul 2>&1 && echo [OK] Claude CLI found || echo [--] Claude CLI not found. Optional: only for Claude-written titles or the "Claude in Chrome" upload method. Without it the tool uses real-quote titles and the Chrome script.

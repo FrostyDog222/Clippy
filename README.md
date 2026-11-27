@@ -119,7 +119,7 @@ Pick your languages in Settings. Clippy reads the language from the speech and o
 
 ## Requirements
 
-Windows 10 or 11, Google Chrome, Python 3.10+, ffmpeg and a JavaScript runtime for yt-dlp (Deno or Node.js). `setup.bat` checks for each and offers to install what is missing with winget.
+Windows 10 or 11, a browser (Google Chrome or Microsoft Edge, which every Windows PC already has), Python 3.10+, ffmpeg and a JavaScript runtime for yt-dlp (Deno or Node.js). `setup.bat` checks for each and offers to install what is missing with winget.
 
 ## Start
 

@@ -10,8 +10,8 @@ import argparse, json, pathlib, subprocess, sys, time, urllib.request
 
 R = pathlib.Path(__file__).resolve().parent.parent
 PROFILE = R / "chrome_profile"
-CHROME = next((p for p in (r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-                           r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe") if pathlib.Path(p).exists()), None)
+from common import find_browser  # noqa: E402
+BROWSER_NAME, CHROME, _ = find_browser()  # CHROME = the browser's exe: Google Chrome, or Microsoft Edge when Chrome is not installed (the name stayed for older code)
 PORT = 9223
 NOWIN = 0x08000000
 
@@ -85,7 +85,7 @@ def quiet_screen(wait=0):
 
 def start_chrome(port=None, only=None, mode=None):
     if not CHROME:
-        sys.exit("Chrome not found")
+        sys.exit("No browser found: install Google Chrome (Microsoft Edge also works, it comes with Windows)")
     args = [CHROME, f"--user-data-dir={PROFILE}", "--no-first-run", "--no-default-browser-check", "--disable-session-crashed-bubble",
             "--disable-background-mode", "--hide-crash-restore-bubble", "--noerrdialogs",
             # keep Chrome's own chatter minimal: no sync, no background updates / pings / telemetry, so only the sites we open are contacted
@@ -269,7 +269,7 @@ def free_profile():
     (a second Chrome on the same profile opens its window INSIDE the first one, out of sight and without focus)."""
     if sys.platform != "win32":
         return
-    ps = ("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object { $_.CommandLine -and $_.CommandLine.ToLower().Contains($env:CLIPPY_PROF) } | "
+    ps = ("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe' OR Name='msedge.exe'\" | Where-Object { $_.CommandLine -and $_.CommandLine.ToLower().Contains($env:CLIPPY_PROF) } | "
           "ForEach-Object { taskkill /PID $_.ProcessId /T /F | Out-Null }")
     try:
         subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps], creationflags=NOWIN, capture_output=True, timeout=30,

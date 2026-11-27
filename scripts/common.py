@@ -6,6 +6,22 @@ ROOT = Path(os.environ.get("CLIP_DESK_HOME", Path.cwd()))
 JOBS = ROOT / "jobs"
 
 
+BROWSERS = (  # (name, yt-dlp name, install places): Google Chrome first, Microsoft Edge when it is not installed (every Windows 10 / 11 PC has Edge, same engine)
+    ("Google Chrome", "chrome", (r"C:\Program Files\Google\Chrome\Application\chrome.exe", r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+                                 os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"))),
+    ("Microsoft Edge", "edge", (r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", r"C:\Program Files\Microsoft\Edge\Application\msedge.exe")),
+)
+
+
+def find_browser():
+    """(name, path, yt-dlp name) of the browser Clippy uses for sign-in and uploads, or (None, None, None). Chrome is preferred; users do not need it, Edge does the same job."""
+    for name, yt, paths in BROWSERS:
+        p = next((x for x in paths if Path(x).exists()), None)
+        if p:
+            return name, p, yt
+    return None, None, None
+
+
 def tool(name):
     p = shutil.which(name)
     if not p:
@@ -32,7 +48,7 @@ def youtube_cookie_args():
         if (here / "post.lock").exists():  # an upload is using that Chrome profile right now: its cookie file is locked and cannot be copied (the run would fail), so go without cookies this once
             return []
         if cfg.get("youtube_cookies") and prof.exists():
-            return ["--cookies-from-browser", f"chrome:{prof}"]
+            return ["--cookies-from-browser", f"{find_browser()[2] or 'chrome'}:{prof}"]
     except Exception:
         pass
     return []

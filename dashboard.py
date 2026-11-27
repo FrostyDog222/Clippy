@@ -363,8 +363,13 @@ def _bg(what, args, flags):
     threading.Thread(target=w, daemon=True).start()
 
 
+NO_BROWSER = "No browser found: Clippy needs Google Chrome or Microsoft Edge to sign in and upload. Edge comes with Windows 10 and 11; if it was removed, install Chrome (google.com/chrome) and restart Clippy."
+
+
 def start_signin():
-    """Open the dedicated Chrome window so the user signs in; when it is closed, re-check status automatically."""
+    """Open the dedicated browser window (Chrome, or Edge when Chrome is not installed) so the user signs in; when it is closed, re-check status automatically."""
+    if not getattr(__import__("upload"), "CHROME", None):
+        return NO_BROWSER
     if _busy["what"] or running():
         return "Busy: wait for the current run or check to finish"
     if (R / "post.lock").exists():
@@ -380,6 +385,8 @@ def start_signin():
 
 
 def start_check():
+    if not getattr(__import__("upload"), "CHROME", None):
+        return NO_BROWSER
     if _busy["what"] or running():
         return "Busy: wait for the current run or sign-in to finish"
     _bg("check", ["status"], NOWIN)
@@ -1412,7 +1419,7 @@ class H(http.server.BaseHTTPRequestHandler):
             log = log_text()
             return self.send(200, json.dumps({"config": c, "paused": PAUSE.exists(), "checks": checks(),
                                               "today": [p for p in posts if p.get("date") == today and not p.get("deleted")], "log": log,
-                                              "progress": progress(), "signin": signin_state(), "jobs_mb": cleanup.jobs_mb(), "all_languages": textutil.LANGS, "perf": perf(), "ai_keys": {p["id"]: secretstore.exists(f"key_{p['id']}") for p in c.get("ai_profiles", [])}, "blocked": blocked_msg(c), "live": live_status(),
+                                              "progress": progress(), "signin": signin_state(), "browser": getattr(__import__("upload"), "BROWSER_NAME", None), "jobs_mb": cleanup.jobs_mb(), "all_languages": textutil.LANGS, "perf": perf(), "ai_keys": {p["id"]: secretstore.exists(f"key_{p['id']}") for p in c.get("ai_profiles", [])}, "blocked": blocked_msg(c), "live": live_status(),
                                               "review": review_items(), "run_stale": run_stale(), "autostart": autostart_state(), "health": health_info(), "run_timing": run_timing(), "run_suspended": run_suspended(),
                                               "update": update_info(), "learn": learn_info(), "boot": BOOT, "restart_needed": restart_wanted(), "html": int((R / "dashboard.html").stat().st_mtime),
                                               "runlog": log_text(8000, 8000),  # the Current run log: the live watcher's log while live watching is on, else the last run's
@@ -1808,7 +1815,7 @@ def health_info():
             import health, shutil as _sh
             c = read_cfg()
             prof = next((p for p in c.get("ai_profiles", []) if p.get("id") == c.get("ai_active")), None)
-            have = {"chrome": bool(getattr(__import__("upload"), "CHROME", None)), "ffmpeg": bool(_sh.which("ffmpeg")), "ytdlp": bool(importlib.util.find_spec("yt_dlp") or _sh.which("yt-dlp")),
+            have = {"chrome": bool(getattr(__import__("upload"), "CHROME", None)), "browser": getattr(__import__("upload"), "BROWSER_NAME", None), "ffmpeg": bool(_sh.which("ffmpeg")), "ytdlp": bool(importlib.util.find_spec("yt_dlp") or _sh.which("yt-dlp")),
                     "ai_key": bool(prof and secretstore.exists("key_" + str(prof.get("id"))))}
             try:
                 free = _sh.disk_usage(str(R)).free / 1e9

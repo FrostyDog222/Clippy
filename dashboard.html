@@ -303,7 +303,7 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:p
   <div class="sw"><div>TikTok</div><span class="pill"><span class="dot" id="td"></span><span id="tk">Not checked</span></span></div>
   <div class="btns" style="margin-top:8px"><button class="btn pri" id="sib" onclick="post('/api/signin')">Sign in</button><button class="btn" id="scb" onclick="post('/api/signcheck')">Check status</button></div>
   <div class="hint" id="sih"></div>
-  <div class="hint">For the Chrome script method. "Sign in" opens a separate Chrome window: log in to YouTube and TikTok yourself, then close the window. You only do this once; the login is saved and reused, until a site expires it. Claude in Chrome uses your normal Chrome instead.</div>
+  <div class="hint" id="sbh">For the browser script method. "Sign in" opens a separate browser window: log in to YouTube and TikTok yourself, then close the window. You only do this once; the login is saved and reused, until a site expires it. Claude in Chrome uses your normal Chrome instead.</div>
 </div>
     <div class="card"><h2>You</h2>
     <label class="f"><span>Time and date format (used by the calendar, the clips and the schedule)</span><select id="time_format"><option value="12">12-hour, US dates (11/21/2026, 7:00 PM)</option><option value="24">24-hour, Europe dates (21.11.2026, 19:00)</option></select></label>
@@ -542,7 +542,7 @@ $('s2').textContent=d.why.replace(/^Waiting: /,'').replace(/^Next run is due now
 visShow();
 {const s=d.signin||{},b=s.busy,set=(dot,t,v)=>{dot.className='dot '+(v===true?'on':v===false?'bad':'');t.textContent=b?'Checking...':v===true?'Signed in':v===false?'Needs sign in':'Not checked'};
 set($('yd'),$('yt'),s.youtube);set($('td'),$('tk'),s.tiktok);
-$('sib').disabled=$('scb').disabled=!!b;$('sih').textContent=b==='login'?'Sign-in window is open. Close it when you are done and I will re-check.':b==='check'?'Checking both accounts (about 15 seconds)...':s.ts?'Last checked '+s.ts.replace('T',' '):''}
+$('sib').disabled=$('scb').disabled=!!b;$('sbh').innerHTML=(d.browser?'Clippy uses <b>'+esc(d.browser)+'</b> for this (it needs Google Chrome or Microsoft Edge on this PC). ':'<b>No browser found.</b> Clippy needs Google Chrome or Microsoft Edge (Edge comes with Windows 10 and 11). Install one and restart Clippy. ')+'"Sign in" opens a separate window of it: log in to YouTube and TikTok yourself, then close the window. You only do this once; the login is saved and reused, until a site expires it.';$('sih').textContent=b==='login'?'Sign-in window is open. Close it when you are done and I will re-check.':b==='check'?'Checking both accounts (about 15 seconds)...':s.ts?'Last checked '+s.ts.replace('T',' '):''}
 {const L=d.live,b=$('livebox');b.innerHTML=!srv.live_watch?'Off.':!L?'Starting... (the watcher is looking for live streams)':(L.watching.length?'<b>Watching now:</b><br>'+L.watching.map(w=>esc(w.platform)+' &bull; '+esc(w.channel)+' &bull; '+(w.viewers||'?')+' viewers &bull; '+w.spikes+' chat spike(s)').join('<br>'):'No suitable live stream right now, checking again soon.')+'<br>Clips waiting: '+L.queued+' &bull; Posted from live: '+L.posted+' &bull; '+esc(L.last||'')}
 srvKeys=d.ai_keys||{};keyst();renderReview(d.review||[],d.mode);$('jmb').textContent=d.jobs_mb>=1000?(d.jobs_mb/1000).toFixed(1)+' GB':d.jobs_mb+' MB';
 $('chk').innerHTML=d.checks.map(x=>'<div class="'+(x[1]?'ok':'no')+'">'+(x[1]?'✓':'✗')+' '+x[0]+'</div>').join('');

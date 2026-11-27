@@ -18,8 +18,9 @@ def checks(cfg, signin, update, free_gb, waiting, have, yt_limit_until=None, max
             add("signin_" + key, "bad", f"Not signed in to {name}", "Uploads to it will fail until you sign in.", {"label": "Sign in", "action": "signin"})
         else:
             add("signin_" + key, "info", f"{name} sign-in not checked yet", "Press Check status in Settings to be sure.", {"label": "Check", "action": "settings:scb"})
-    add("chrome", "ok" if have.get("chrome") else "bad", "Google Chrome found" if have.get("chrome") else "Google Chrome not found",
-        "" if have.get("chrome") else "Uploading needs Google Chrome. Install it and restart Clippy.")
+    bn = have.get("browser") or "Google Chrome"
+    add("chrome", "ok" if have.get("chrome") else "bad", f"{bn} found (used to sign in and upload)" if have.get("chrome") else "No browser found",
+        "" if have.get("chrome") else "Uploading needs Google Chrome or Microsoft Edge (Edge comes with Windows). Install one and restart Clippy.")
     for k, label in (("ffmpeg", "ffmpeg"), ("ytdlp", "yt-dlp")):
         add(k, "ok" if have.get(k) else "bad", f"{label} found" if have.get(k) else f"{label} not found",
             "" if have.get(k) else "Run setup.bat to install it.")
