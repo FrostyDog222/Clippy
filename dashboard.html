@@ -66,6 +66,7 @@ h1.hello{font-size:36px;font-weight:800;margin:0;letter-spacing:-.6px;line-heigh
 .runbtns{margin-top:20px;position:relative;z-index:1}
 .hint{color:var(--mut);font-size:13px;margin-top:10px}
 .kl{display:inline-block;margin-left:8px;padding:1px 9px 1px 7px;border-radius:99px;font-size:12px;font-weight:600;border:1px solid currentColor}.kl:before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:currentColor;margin-right:6px}
+.prow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 12px;margin-top:6px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;cursor:pointer}.prow.on{border-color:#8b5cf6;box-shadow:0 0 0 1px #8b5cf6 inset}.prow .tag{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#a78bfa}.prow .sp{flex:1}.prow small{color:var(--mut)}.prow .btn{padding:4px 10px;font-size:12px}
 .kl.g{color:#3ddc84}.kl.r{color:#ff5d6c}.kl.y{color:#ffc247}.kl.w{color:var(--mut)}
 #runlog{display:none;margin:14px 0 0;max-height:300px;overflow:auto;background:rgba(7,4,18,.82);border:1px solid var(--line);border-radius:14px;padding:14px 16px;font:12.5px/1.55 ui-monospace,Consolas,monospace;white-space:pre-wrap;color:#cfc8f5;position:relative;z-index:1}
 .mimg{background:var(--mascot) center/contain no-repeat}
@@ -268,7 +269,7 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:p
       <option value="auto">Auto (webcam on top, else blur)</option><option value="facecam">Crop the webcam on top</option><option value="blur">Blur (whole stream, no crop)</option></select>
       <small>Webcam crop shows the streamer's face large above the game. If no face is found it uses blur.</small></label>
   </div>
-  <div class="f" style="margin-bottom:14px"><span style="display:block;text-align:center;font-size:12px;color:var(--mut);margin-bottom:5px">Video languages (anything else is skipped)</span>
+  <div class="f" style="margin-bottom:14px"><span style="display:block;text-align:center;font-size:12px;color:var(--mut);margin-bottom:5px">Video languages (anything else is skipped; trending searches look for creators who speak them)</span>
     <div class="chips" id="langs"></div>
     <small style="color:var(--mut);font-size:12px;display:block;text-align:center">The language is detected from the speech. Pick one or more, or "Any language" for no filter. English works best. Other languages work too (captions use a font that can draw the script; reaction words are known for 15 languages), but Clippy only trusts a language it is 80% sure of: when it is less sure and the words do not look English, the clip gets no captions and waits for you (&#9888; language unsure). A moment counts when at least 25% of its words are in a language you picked, so a streamer switching between their language and English works. Every clip has a &quot;Rebuild without captions&quot; button. <b>Heads up:</b> English works fine; other languages are not fully tested and can fail (wrong or missing captions, a missed moment). Please check those clips before posting.</small></div>
   <label class="chk" style="display:flex;align-items:flex-start;gap:10px;margin:10px 0 4px;cursor:pointer"><input type="checkbox" id="ai_examples" style="margin-top:3px"><span>Show the AI examples of <b>your</b> taste: a few clips you liked and disliked, as one short description each (with the funny line for liked clips and your reasons for disliked ones). It judges against what you found funny. Off by default. Only these short descriptions are sent to your AI provider, never a transcript.</span></label>
@@ -276,12 +277,14 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:p
     <option value="claude">Claude (funny, catchy; titles only, needs the Claude CLI signed in)</option><option value="api">My own API key (OpenAI, Anthropic, OpenRouter, or a local model)</option><option value="template">No AI (smart event titles, no account needed)</option></select>
     <small>Only the titles use Claude. Cutting, uploading and scheduling stay Claude-free. If the CLI is not signed in, quote titles are used.</small></label>
   <div id="apibox" style="display:none">
-    <label class="f"><span>AI profile (switch between models here)</span>
-      <div style="display:flex;gap:8px"><select id="ai_active" style="width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font:inherit"></select><button class="btn" type="button" onclick="addProf()">New</button><button class="btn bad" type="button" onclick="delProf()">Delete</button></div>
-      <small>Add one profile per provider or model (Gemini, OpenAI, Claude API, a local model...). The selected profile is used first for titles and the frame check; if it fails (quota used up, server busy) the other profiles that have a key are tried automatically.</small></label>
+    <div class="f"><span>AI models</span>
+      <div id="proflist"></div>
+      <div style="margin-top:8px"><button class="btn" type="button" id="addprof" onclick="addProf()">+ Add model</button></div>
+      <small>The first model (Main) is used for titles and the frame check. If it fails (quota used up, server busy), the backups are tried one after another, in the order shown. Click a model to edit it.</small></div>
+    <details style="margin:8px 0"><summary style="cursor:pointer;color:var(--mut);font-size:13px">Advanced: a different model for the frame check or the titles</summary>
     <div class="r2"><label class="f"><span>Frame check uses</span><select id="ai_check_profile" style="width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font:inherit"></select></label>
     <label class="f"><span>Titles use</span><select id="ai_title_profile" style="width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font:inherit"></select></label></div>
-    <small style="color:var(--mut);font-size:12px">Use a fast cheap model for the frame check (many calls, only yes/no) and a stronger one for the titles (few calls). If a profile fails, the others are tried.</small>
+    <small style="color:var(--mut);font-size:12px">Use a fast cheap model for the frame check (many calls, only yes/no) and a stronger one for the titles (few calls). If a profile fails, the others are tried.</small></details>
     <div id="profbox">
       <div class="r2"><label class="f"><span>Profile name</span><input type="text" id="p_name" placeholder="Gemini"></label>
       <label class="f"><span>API address</span><input type="text" id="p_url" placeholder="https://generativelanguage.googleapis.com/v1beta/openai"></label></div>
@@ -411,7 +414,15 @@ const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&qu
 function addC(v){v.split(/[\n,]/).map(s=>s.trim()).filter(Boolean).forEach(n=>{if(!draft.creators.some(x=>x.toLowerCase()===n.toLowerCase()))draft.creators.push(n)});renderChips();chg()}
 function rmC(i){draft.creators.splice(i,1);renderChips();chg()}
 let srvKeys={};
-function prof(){return (draft.ai_profiles||[]).find(p=>p.id===draft.ai_active)}
+let editId='';
+function prof(){const ps=draft.ai_profiles||[];return ps.find(p=>p.id===editId)||ps.find(p=>p.id===draft.ai_active)||ps[0]}
+function mainProf(){const ps=draft.ai_profiles||[];return ps.find(p=>p.id===draft.ai_active)||ps[0]}
+let rowsHtml='';
+function listRows(){const ps=draft.ai_profiles||[],m=mainProf(),ed=prof(),order=m?[m,...ps.filter(p=>p!==m)]:[];
+const h=order.map((p,i)=>{const l=lightOf(p);return '<div class="prow'+(p===ed?' on':'')+'" onclick="editProf(\''+esc(p.id)+'\')"><span class="tag">'+(i?'Backup '+i:'Main')+'</span><b>'+esc(p.name||'New model')+'</b><small>'+esc(p.model||'no model yet')+'</small><span class="kl '+l.c+'" title="'+esc(l.tip||'')+'">'+esc(l.t)+'</span><span class="sp"></span>'+(i?'<button class="btn" type="button" onclick="event.stopPropagation();makeMain(\''+esc(p.id)+'\')">Make main</button>':'')+'<button class="btn bad" type="button" onclick="event.stopPropagation();delProf(\''+esc(p.id)+'\')">Remove</button></div>'}).join('')||'<div class="hint">No model yet: press + Add model.</div>';
+if(h!==rowsHtml){rowsHtml=h;$('proflist').innerHTML=h}$('addprof').textContent=order.length?'+ Add backup model':'+ Add model'}
+function editProf(id){editId=id;renderProf()}
+function makeMain(id){draft.ai_active=id;listRows();chg()}
 function keyst(){const p=prof();$('keystat').textContent=p&&srvKeys[p.id]?'(a key is saved)':'(no key saved)';keyLight();const a=document.activeElement;if(!a||(a.id!=='p_model'&&a.id!=='p_url'))checkProf()}
 // Status light next to the key: green = the model answered, red = key/model/address rejected, yellow = needs attention (no key, no model, busy or out of quota).
 const AIST={};
@@ -419,28 +430,28 @@ const aiLocal=p=>/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])/i.test(p.url||'')
 const aiK=p=>[p.id,p.url,p.model,!!srvKeys[p.id]].join('|');
 function light(c,t,tip){const e=$('keylight');e.className='kl '+c;e.textContent=t;e.title=tip||''}
 function aiReady(p){if(!p.url)return'Fill in the API address';if(!srvKeys[p.id]&&!aiLocal(p))return'No key saved yet: paste it and press Save key';if(!p.model)return'Pick a model (press Load models)';return''}
-function keyLight(){const p=prof();if(!p)return;const why=aiReady(p);if(why)return light('y','Needs attention',why);const s=AIST[aiK(p)];if(!s)return light('w','Not checked','Press Test this model');light(s.c,s.t,s.tip)}
+function lightOf(p){const why=aiReady(p);if(why)return{c:'y',t:'Needs attention',tip:why};return AIST[aiK(p)]||{c:'w',t:'Not checked',tip:'Press Test this model'}}
+function keyLight(){const p=prof();if(p){const l=lightOf(p);light(l.c,l.t,l.tip)}listRows()}
 function aiVerdict(j){if(j.ok)return{c:'g',t:'Working',tip:'Answered in '+j.ms+' ms'};const e=String(j.error||'');
 if(/429|quota|rate.?limit|overload|503|502|unavailable|busy|timed? ?out|exhaust/i.test(e))return{c:'y',t:'Needs attention',tip:'The key looks fine but the provider is busy or the quota is used up: '+e};
 if(/404|not found|no such model|does not exist/i.test(e))return{c:'r',t:'Model not found',tip:e};
 if(/401|403|unauthor|invalid|api.?key|permission|denied|forbidden|credential/i.test(e))return{c:'r',t:'Key rejected',tip:e};
 return{c:'r',t:'Not working',tip:e||'no answer'}}
-async function runTest(p){const k=aiK(p);AIST[k]={c:'w',t:'Checking...'};keyLight();const r=await fetch('/api/aitest',{method:'POST',body:JSON.stringify({id:p.id,url:p.url,model:p.model})});const j=await r.json().catch(()=>({}));AIST[k]=aiVerdict(j);if(prof()===p)keyLight();return j}
-function checkProf(){const p=prof();if(!p||aiReady(p)||AIST[aiK(p)])return;runTest(p)}
+async function runTest(p){const k=aiK(p);AIST[k]={c:'w',t:'Checking...'};keyLight();let j={};try{const r=await fetch('/api/aitest',{method:'POST',body:JSON.stringify({id:p.id,url:p.url,model:p.model})});j=await r.json()}catch(e){j={error:'could not reach Clippy: '+e}}AIST[k]=aiVerdict(j);keyLight();return j}
+function checkProf(){(draft.ai_profiles||[]).forEach(p=>{if(!aiReady(p)&&!AIST[aiK(p)])runTest(p)})}
 // the best model to start with from a provider's list: a fast, current text model (not embeddings, speech, images...)
 function bestModel(l){const ok=l.filter(m=>!/embed|tts|image|audio|whisper|moderation|dall|imagen|veo|robotics|aqa|transcribe|realtime|live|guard/i.test(m));
 const stable=m=>!/preview|exp|lite|latest|-\d{4}-\d\d-\d\d$/i.test(m);for(const rx of [/flash/i,/mini/i,/haiku/i,/sonnet/i,/gpt|llama|qwen|gemma/i]){const c=ok.filter(m=>rx.test(m)).sort().reverse();const s=c.find(stable)||c[0];if(s)return s}return ok[0]||l[0]||''}
 // a provider from the first letters of its key, so the address can be filled in by itself
 function keyHost(k){return/^AIza/.test(k)?'https://generativelanguage.googleapis.com/v1beta/openai':/^sk-ant-/.test(k)?'https://api.anthropic.com/v1':/^sk-or-/.test(k)?'https://openrouter.ai/api/v1':/^gsk_/.test(k)?'https://api.groq.com/openai/v1':/^sk-/.test(k)?'https://api.openai.com/v1':''}
-function renderProf(){const ps=draft.ai_profiles=draft.ai_profiles||[];$('ai_active').innerHTML=ps.map(p=>'<option value="'+esc(p.id)+'"'+(p.id===draft.ai_active?' selected':'')+'>'+esc(p.name)+' ('+esc(p.model||'no model')+')</option>').join('')||'<option value="">No profile yet: press New</option>';
+function renderProf(){const ps=draft.ai_profiles=draft.ai_profiles||[];if(!ps.find(p=>p.id===draft.ai_active))draft.ai_active=(ps[0]||{}).id||'';
 const opts='<option value="">Selected profile</option>'+ps.map(p=>'<option value="'+esc(p.id)+'">'+esc(p.name)+' ('+esc(p.model||'no model')+')</option>').join('');
 ['ai_check_profile','ai_title_profile'].forEach(k=>{$(k).innerHTML=opts;$(k).value=draft[k]||''});
-const p=prof();$('profbox').style.display=p?'block':'none';if(p){$('p_name').value=p.name;$('p_url').value=p.url;$('p_model').value=p.model}$('aitest').textContent='';keyst()}
-function addProf(){const ps=draft.ai_profiles=draft.ai_profiles||[];const id='p'+Date.now().toString(36);ps.push({id,name:'New profile',url:'',model:''});draft.ai_active=id;renderProf();chg()}
-async function delProf(){const p=prof();if(!p||!await ask('Delete profile "'+p.name+'"?\n\nIts saved key is kept on disk until you save an empty key for it.','Delete',1))return;draft.ai_profiles=draft.ai_profiles.filter(x=>x!==p);draft.ai_active=(draft.ai_profiles[0]||{}).id||'';renderProf();chg()}
+const p=prof();editId=p?p.id:'';$('profbox').style.display=p?'block':'none';if(p){$('p_name').value=p.name;$('p_url').value=p.url;$('p_model').value=p.model}$('aitest').textContent='';keyst()}
+function addProf(){const ps=draft.ai_profiles=draft.ai_profiles||[];const id='p'+Date.now().toString(36);ps.push({id,name:'New model',url:'',model:''});if(ps.length===1)draft.ai_active=id;editId=id;renderProf();chg()}
+async function delProf(id){const p=(draft.ai_profiles||[]).find(x=>x.id===id)||prof();if(!p||!await ask('Remove "'+p.name+'"?\n\nIts saved key is kept on disk until you save an empty key for it.','Remove',1))return;draft.ai_profiles=draft.ai_profiles.filter(x=>x!==p);if(draft.ai_active===p.id)draft.ai_active=(draft.ai_profiles[0]||{}).id||'';if(editId===p.id)editId='';renderProf();chg()}
 ['ai_check_profile','ai_title_profile'].forEach(k=>$(k).onchange=e=>{draft[k]=e.target.value;chg()});
-$('ai_active').onchange=e=>{draft.ai_active=e.target.value;renderProf();chg()};
-['name','url','model'].forEach(k=>$('p_'+k).addEventListener('input',e=>{const p=prof();if(p){p[k]=e.target.value;chg()}}));
+['name','url','model'].forEach(k=>$('p_'+k).addEventListener('input',e=>{const p=prof();if(p){p[k]=e.target.value;chg();listRows()}}));
 // auto: also pick a model by itself when none is set or the set one is not in the provider's list
 async function loadModels(auto){const p=prof();if(!p||!p.url)return;$('mcount').textContent='(loading...)';const r=await fetch('/api/models',{method:'POST',body:JSON.stringify({id:p.id,url:p.url})});
 const j=await r.json().catch(()=>({}));if(j.models){$('modellist').innerHTML=j.models.map(m=>'<option value="'+esc(m)+'">').join('');$('mcount').textContent='('+j.models.length+' found: click the box to pick)';

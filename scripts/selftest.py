@@ -1358,6 +1358,16 @@ def test_learn_report():
     assert "win" in out and "1 meh" in out and "+2.50" in out, out  # good (8) vs the rest (5 and 6)
 
 
+def test_searches_and_twitch_clips_follow_the_picked_language():
+    import textutil, twitch
+    q = ["gta 6 gameplay", "gta 6 reaction"]
+    assert textutil.search_queries(q, {"languages": ["en"]}) == q and textutil.search_queries(q, {"languages": []}) == q  # English only / any: unchanged
+    assert textutil.search_queries(q, {"languages": ["ro"]}) == ["gta 6 gameplay în română", "gta 6 reaction în română"]
+    assert "gta 6 gameplay" in textutil.search_queries(q, {"languages": ["en", "es"]}) and any("espa" in x for x in textutil.search_queries(q, {"languages": ["en", "es"]}))
+    assert textutil.twitch_languages({"languages": ["ro", "es"]}) == ["RO", "ES"] and textutil.twitch_languages({"languages": []}) is None
+    assert "languages:[RO,ES]" in twitch._q_clips(["RO", "ES"]) and "languages" not in twitch._q_clips(None) and "languages:[EN]" in twitch._q_clips(("EN",))
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

@@ -76,6 +76,30 @@ CHAT_SHOCK = re.compile(r"(\bWT[FH]\b|\bWHAT THE\b|\bOMG\b|\bOMFG\b|\bNO WAY\b|\
 CHAT_LAUGH = re.compile(r"(\bLMAO+\b|\bLOL\b|\bKEKW?\b|\bOMEGALUL\b|\bLUL\b|\bAHAHA|😂|🤣|😆|😹|\bja(ja)+j?\b|\bje(je)+\b|\bk{3,}\b|\brs(rs)+\b|\bha(ha)+h?\b|\bhe(he)+\b|\bp?t?mdr\b|\bx+d{2,}\b|\bLULW\b)", re.I)  # + laughter in Spanish, Portuguese, French, German...
 
 
+# "in <language>" in that language: added to YouTube searches so the results come from creators of the country that speaks it (the speech check afterwards still has the last word)
+LANG_HINT = {"es": "en español", "pt": "em português", "fr": "en français", "de": "auf deutsch", "it": "in italiano", "ru": "на русском", "tr": "türkçe", "ar": "بالعربي",
+             "ja": "日本語", "ko": "한국어", "ro": "în română", "pl": "po polsku", "nl": "in het nederlands", "hi": "हिंदी में", "id": "bahasa indonesia"}
+
+
+def search_queries(queries, cfg):
+    """The YouTube searches for the languages picked in Settings. English only / any language: unchanged. Otherwise each language gets its own searches
+    ("gta 6 reaction en español"), and English ones stay only when English is picked too."""
+    langs = allowed_languages(cfg)
+    if not langs or langs == ["en"]:
+        return list(queries)
+    out = list(queries) if "en" in langs else []
+    for code in langs:
+        if code in LANG_HINT:
+            out += [f"{q} {LANG_HINT[code]}" for q in list(queries)[:3]]
+    return out or list(queries)
+
+
+def twitch_languages(cfg):
+    """Twitch clip language codes (uppercase: EN, ES, RO...) for the picked languages; None = any language."""
+    langs = allowed_languages(cfg)
+    return [c.upper() for c in langs if c in LANGS] if langs else None
+
+
 def stream_language_ok(lang, cfg):
     """A live stream's language (en, pt, de... as the streamer set it on Twitch; '' = unknown) against the languages you picked in Settings: unknown is allowed."""
     allowed = allowed_languages(cfg)

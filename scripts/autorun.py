@@ -165,7 +165,7 @@ def search_twitch_clips(skip_ids):
     import twitch
     game = None if TP["any"] else ("Grand Theft Auto VI" if TP["gta"] else TP["name"])
     out = []
-    for c in twitch.top_clips(game, 8):
+    for c in twitch.top_clips(game, 8, langs=textutil.twitch_languages(CFG)):  # clips of streamers who speak the languages picked in Settings
         if c["id"] in skip_ids or BANNED.search(c["title"]) or not (15 <= c["duration"] <= 60):
             continue
         out.append({**c, "twitch": True})
@@ -191,7 +191,7 @@ def creator_twitch_clips(creator, skip_ids, top=3, period="LAST_WEEK"):
 def search_trending(skip_channels, skip_ids):
     """Popular videos on the topic (or just whatever is trending, when no topic is set) right now across YouTube (one video per channel), most viewed first, only the last few days."""
     best = {}
-    for q in TP["queries"]:
+    for q in textutil.search_queries(TP["queries"], CFG):  # in the picked language(s), so the creators come from the country that speaks it
         for e in flat_search(q):
             v = usable(e)
             if v and v["id"] not in skip_ids and norm(v["channel"]) not in skip_channels and (norm(v["channel"]) not in best or v["views"] > best[norm(v["channel"])]["views"]):

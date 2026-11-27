@@ -44,12 +44,15 @@ def _rows(game):
     return out
 
 
-_Q_CLIPS = """query($name:String!,$n:Int!,$p:ClipsPeriod){ game(name:$name){ displayName clips(first:$n, criteria:{period:$p, sort:VIEWS_DESC, languages:[EN]}){ edges{ node{
- slug title viewCount durationSeconds createdAt url broadcaster{ displayName } } } } } }"""
+def _q_clips(langs):
+    """Clips of a game; `langs` = Twitch language codes (['EN'], ['RO', 'EN']...) so the clips come from streamers who speak them; None = any language."""
+    lg = ", languages:[" + ",".join(c for c in langs if c.isalpha() and len(c) == 2) + "]" if langs else ""
+    return ("query($name:String!,$n:Int!,$p:ClipsPeriod){ game(name:$name){ displayName clips(first:$n, criteria:{period:$p, sort:VIEWS_DESC" + lg + "}){ edges{ node{\n"
+            " slug title viewCount durationSeconds createdAt url broadcaster{ displayName } } } } } }")
 _Q_TOPGAMES = """query($n:Int!){ games(first:$n){ edges{ node{ displayName } } } }"""
 
 
-def top_clips(game=None, limit=10, period="LAST_DAY"):
+def top_clips(game=None, limit=10, period="LAST_DAY", langs=("EN",)):
     """The most viewed clips viewers made on Twitch (no key). game=None: the clips of the 3 most watched categories right now. Rows: id, url, title, channel,
     duration, views. A clip is a moment the viewers already picked, so it is a strong trending signal. Empty list on any problem."""
     out = []
@@ -63,7 +66,7 @@ def top_clips(game=None, limit=10, period="LAST_DAY"):
                 pass
             edges = []
             for per in dict.fromkeys((period, "LAST_WEEK")):  # a quiet topic has no clips today: look at the last week
-                g = (gql(_Q_CLIPS, {"name": name, "n": limit, "p": per}).get("data") or {}).get("game") or {}
+                g = (gql(_q_clips(langs), {"name": name, "n": limit, "p": per}).get("data") or {}).get("game") or {}
                 edges = (g.get("clips") or {}).get("edges", [])
                 if edges:
                     break
