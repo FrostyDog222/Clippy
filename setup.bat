@@ -73,7 +73,23 @@ if exist "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" set CHROME=G
 if not defined CHROME if exist "%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe" set CHROME=Google Chrome
 if not defined CHROME if exist "%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe" set CHROME=Microsoft Edge
 if not defined CHROME if exist "%ProgramFiles%\Microsoft\Edge\Application\msedge.exe" set CHROME=Microsoft Edge
-if defined CHROME (echo [OK] %CHROME% found) else echo [!!] No browser found: install Google Chrome from https://www.google.com/chrome/ (Microsoft Edge also works)
+if defined CHROME goto browser_ok
+echo [!!] No browser found. Clippy needs Google Chrome or Microsoft Edge to sign in to YouTube / TikTok and to upload.
+choice /m "Install Google Chrome now with winget"
+if errorlevel 2 goto browser_none
+winget install -e --id Google.Chrome
+if exist "%ProgramFiles%\Google\Chrome\Application\chrome.exe" set CHROME=Google Chrome
+if exist "%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe" set CHROME=Google Chrome
+if not defined CHROME if exist "%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe" set CHROME=Google Chrome
+if not defined CHROME if exist "%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe" set CHROME=Microsoft Edge
+if not defined CHROME if exist "%ProgramFiles%\Microsoft\Edge\Application\msedge.exe" set CHROME=Microsoft Edge
+if defined CHROME goto browser_ok
+:browser_none
+echo [!!] Still no browser: install Google Chrome from https://www.google.com/chrome/ ^(Microsoft Edge also works^) and run setup.bat again.
+goto browser_done
+:browser_ok
+echo [OK] %CHROME% found
+:browser_done
 
 rem ---- 5. Claude CLI (only for the "Claude in Chrome" upload method) ----
 where claude >nul 2>&1 && echo [OK] Claude CLI found || echo [--] Claude CLI not found. Optional: only for Claude-written titles or the "Claude in Chrome" upload method. Without it the tool uses real-quote titles and the Chrome script.
