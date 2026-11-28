@@ -22,6 +22,32 @@ def find_browser():
     return None, None, None
 
 
+def whisper_types(device):
+    """The compute types to try for faster-whisper on this device, best first. A GPU decides what it can do (older graphics cards have no float16, which made the
+    speech recognition fail with "Requested float16 compute type"), so the list comes from what the device itself reports."""
+    if device != "cuda":
+        return ["int8", "float32"]
+    try:
+        import ctranslate2
+        sup = set(ctranslate2.get_supported_compute_types("cuda"))
+    except Exception:
+        sup = {"float16"}
+    return [t for t in ("float16", "int8_float16", "int8", "float32") if t in sup] or ["int8"]
+
+
+def load_whisper(device, size="small"):
+    """A faster-whisper model on "cuda" or "cpu" with the first compute type that device supports. Raises the last error when none works (callers fall back to the CPU)."""
+    from faster_whisper import WhisperModel
+    last = None
+    for ct in whisper_types(device):
+        try:
+            return WhisperModel(size, device=device, compute_type=ct)
+        except (RuntimeError, ValueError) as e:
+            last = e
+            print(f"Whisper on {device} with {ct} is not available here ({str(e)[:80]})", file=sys.stderr)
+    raise last or RuntimeError("no compute type works")
+
+
 def tool(name):
     p = shutil.which(name)
     if not p:

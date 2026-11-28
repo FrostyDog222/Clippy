@@ -10,7 +10,7 @@ import argparse, json, math, re, subprocess, sys, wave
 from pathlib import Path
 import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
-from common import ffprobe, is_url, job_dir, load_json, run, save_json, tool, ytdlp_base, ytdlp_json
+from common import ffprobe, is_url, job_dir, load_json, load_whisper, run, save_json, tool, ytdlp_base, ytdlp_json
 
 TALK = re.compile(r"\b(chat|y\s?'?all|subs?|subscribe|donations?|gifted|should i|my channel)\b", re.I)
 # words that show the streamer is really in the game around this moment (a 700-minute stream is mostly talking / other games)
@@ -145,7 +145,7 @@ def transcribe(wav, d):
         pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
 
     def run_on(device):
-        model = WhisperModel("small", device=device, compute_type="float16" if device == "cuda" else "int8")
+        model = load_whisper(device)  # the compute type comes from what this PC's device supports
         segs, tinfo = model.transcribe(pcm, word_timestamps=True, vad_filter=True)
         save_json(d / "lang.json", {"language": tinfo.language, "p": round(float(tinfo.language_probability), 2)})  # English-only pipeline: see main()
         out_words = [{"w": w.word.strip(), "s": round(w.start, 2), "e": round(w.end, 2)} for s in segs for w in (s.words or [])]
@@ -161,7 +161,7 @@ def transcribe(wav, d):
         return out_words
     try:
         words = run_on("cuda" if cuda else "cpu")
-    except RuntimeError as e:  # GPU present but CUDA libraries missing: fall back to CPU
+    except (RuntimeError, ValueError) as e:  # GPU present but unusable (CUDA libraries missing, no float16 on an older card...): fall back to CPU
         print(f"GPU transcription unavailable ({str(e)[:80]}), using CPU")
         words = run_on("cpu")
     save_json(out, words)

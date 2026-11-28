@@ -33,7 +33,12 @@ def main():
         cuda = ctranslate2.get_cuda_device_count() > 0
     except Exception:
         cuda = False
-    model = WhisperModel("small", device="cuda" if cuda else "cpu", compute_type="float16" if cuda else "int8")
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from common import load_whisper
+    try:
+        model = load_whisper("cuda" if cuda else "cpu")
+    except (RuntimeError, ValueError):
+        model = load_whisper("cpu")
     _, tinfo = model.transcribe(pcm, beam_size=1, vad_filter=True, without_timestamps=True)
     print(json.dumps({"language": tinfo.language, "p": round(float(tinfo.language_probability), 2)}))
 

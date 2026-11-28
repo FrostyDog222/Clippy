@@ -236,7 +236,13 @@ def strong_candidates(v):
             log("  analysis took longer than 25 min: giving up on this video"); break
         m = re.search(r"job: (.+)", r.stdout)
         if not m:
-            log("  moments failed: " + (r.stderr or r.stdout)[-200:]); v["_dl_failed"] = True  # a technical failure, not a verdict on the video
+            err = (r.stderr or r.stdout)[-300:]
+            log("  moments failed: " + err[-200:]); v["_dl_failed"] = True  # a technical failure, not a verdict on the video
+            if re.search(r"ctranslate2|faster_whisper|float16|compute type|CUDA|cuDNN|cublas", err, re.I):  # the speech recognition cannot run on this PC: every other slice and video would fail the same way after minutes of downloading
+                global ASR_FAILS
+                ASR_FAILS += 1
+                log("  the speech recognition cannot start on this PC: stopping this video (it is not marked as bad)")
+                break
             if note_block(r.stderr + r.stdout): break  # blocked: stop asking
             continue
         job = pathlib.Path(m.group(1).strip())
@@ -302,6 +308,7 @@ def face_motion(clip):
 
 MUSIC = re.compile(r"[♪♫]|^[\[(]\s*(music|singing|song)\s*[\])]$", re.I)
 COMPILATION = re.compile(r"\b(compilation|funniest moments|funny moments|best moments|best of|montage)\b", re.I)
+ASR_FAILS = 0  # videos that failed because the speech recognition (Whisper) cannot run here: after 2 the run stops instead of downloading more
 NEAR = None  # the closest moment of this run that missed the bar: used (for review only) when nothing else was found
 MIN_FACE_COVERAGE = 0.75  # share of sampled frames whose webcam panel really shows a face (the streamer may switch OBS scenes mid-clip)
 
@@ -830,6 +837,8 @@ def flush(dry):
 def try_videos(vids, st, sf, dry, base_pct, creator=None):
     """Analyse videos in order; for each, try its 3 best strong moments. Returns an exit code if it posted/dry-ran, else None."""
     for v in vids:
+        if ASR_FAILS >= 2:
+            return None  # the speech recognition does not work on this PC: no more downloads (the run ends with a clear message)
         if v["id"] in DONE_VIDS and not v.get("custom"):
             continue
         bl = [norm(x) for x in re.split(r"[,;\n]", str(CFG.get("blocked_streamers", ""))) if norm(x)]  # streamers the user never wants clipped (Settings > Streamers)
@@ -1107,6 +1116,9 @@ def _main():
         code = try_candidate(v, score, job, n, jd["c"], creator, False, memo=jd, review_only=True)
         if code is not None:
             return code
+    if ASR_FAILS >= 2:
+        progress(-1, "Failed: the speech recognition (Whisper) cannot run on this PC. See the log for the error and open an issue on GitHub with it")
+        log("FAILED: the speech recognition cannot run on this PC, so no video could be analysed"); return 3
     progress(100, "Skipped: no strong moment found right now")
     log("no strong moment found; nothing posted")
     return 0

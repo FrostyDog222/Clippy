@@ -1502,6 +1502,48 @@ def test_the_restart_helper_is_valid_and_starts_the_dashboard_again():
     assert "dashboard.py" in src and "raise SystemExit" in src and "range(3)" in src      # starts it, checks it answers, tries again when it does not
 
 
+def test_whisper_picks_a_compute_type_the_device_supports():
+    import common, types, sys as _s
+    assert common.whisper_types("cpu") == ["int8", "float32"]
+    fake_ct = types.SimpleNamespace(get_supported_compute_types=lambda d: ["int8", "float32", "int8_float16"])   # an older graphics card: no float16
+    saved = _s.modules.get("ctranslate2"); _s.modules["ctranslate2"] = fake_ct
+    try:
+        assert common.whisper_types("cuda") == ["int8_float16", "int8", "float32"]
+        tried = []
+        class W:
+            def __init__(self, size, device, compute_type):
+                tried.append(compute_type)
+                if compute_type == "float16":
+                    raise ValueError("Requested float16 compute type, but the target device or backend do not support efficient float16 computation.")
+        saved_fw = _s.modules.get("faster_whisper"); _s.modules["faster_whisper"] = types.SimpleNamespace(WhisperModel=W)
+        try:
+            common.whisper_types = lambda d: ["float16", "int8"]       # the card claims float16 but refuses it: the next type is used
+            assert isinstance(common.load_whisper("cuda"), W) and tried == ["float16", "int8"], tried
+        finally:
+            import importlib; importlib.reload(common)
+            if saved_fw is None: _s.modules.pop("faster_whisper", None)
+            else: _s.modules["faster_whisper"] = saved_fw
+    finally:
+        if saved is None: _s.modules.pop("ctranslate2", None)
+        else: _s.modules["ctranslate2"] = saved
+
+
+def test_a_run_stops_when_the_speech_recognition_cannot_run_here():
+    import types
+    saved = autorun.sh, autorun.log, autorun.note_block, autorun.ASR_FAILS
+    calls = []
+    err = "l = ctranslate2.models.Whisper(\nValueError: Requested float16 compute type, but the target device or backend do not support efficient float16 computation."
+    try:
+        autorun.sh = lambda *a, **k: calls.append(1) or types.SimpleNamespace(stdout="", stderr=err)
+        autorun.log = lambda *a, **k: None
+        autorun.note_block = lambda t: False
+        autorun.ASR_FAILS = 0
+        v = {"id": "x", "duration": 95 * 60, "title": "t", "channel": "c", "views": 1}
+        assert autorun.strong_candidates(v) == [] and len(calls) == 1 and autorun.ASR_FAILS == 1, (calls, autorun.ASR_FAILS)   # one try, not one per slice
+    finally:
+        autorun.sh, autorun.log, autorun.note_block, autorun.ASR_FAILS = saved
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):
