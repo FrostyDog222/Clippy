@@ -308,6 +308,7 @@ def face_motion(clip):
 
 MUSIC = re.compile(r"[♪♫]|^[\[(]\s*(music|singing|song)\s*[\])]$", re.I)
 COMPILATION = re.compile(r"\b(compilation|funniest moments|funny moments|best moments|best of|montage)\b", re.I)
+YT_OFF = False  # YouTube is paused (it asked to confirm 'not a bot'): this run uses Twitch clips only
 ASR_FAILS = 0  # videos that failed because the speech recognition (Whisper) cannot run here: after 2 the run stops instead of downloading more
 NEAR = None  # the closest moment of this run that missed the bar: used (for review only) when nothing else was found
 MIN_FACE_COVERAGE = 0.75  # share of sampled frames whose webcam panel really shows a face (the streamer may switch OBS scenes mid-clip)
@@ -847,7 +848,7 @@ def try_videos(vids, st, sf, dry, base_pct, creator=None):
         progress(base_pct, f"Analysing: {v['channel']} - {v['title'][:50]}")
         log(f"  analysing {v['id']} ({v['duration'] // 60} min, {v['views']} views) {v['title'][:60]}")
         cands = strong_candidates(v)
-        if not cands and yt_blocked():  # download blocked, not a bad video: keep it for later
+        if not cands and not v.get("twitch") and yt_blocked():  # download blocked, not a bad video: keep it for later
             log("  YouTube is blocking downloads right now; nothing was judged"); return None
         if not cands and v.get("_dl_failed"):
             log("  could not fetch / analyse this one (technical problem): not marked as rejected"); continue
@@ -1020,9 +1021,14 @@ def _main():
         ok, why, _ = tick.decide(cfg, st["posts"], now, (R / "PAUSED.txt").exists(), gap=bool(cfg.get("auto_post")))  # the gap only matters for posting by itself
         if not ok:
             progress(100, f"Skipped: {why}"); log(f"NOT DUE: {why}"); return 0
+    global YT_OFF
     left = yt_blocked()
-    if left:  # a cooldown is running: no searches, no downloads
-        progress(100, f"Paused: YouTube asked to confirm 'not a bot', retrying in {left // 60} min"); log(f"YOUTUBE BLOCK: waiting {left // 60} more minutes before touching YouTube again"); return 0
+    if left and a.manual:  # you pressed Run now: try YouTube again (if it is still blocked the pause simply starts over)
+        BLOCK_F.unlink(missing_ok=True); log(f"YOUTUBE PAUSE: ignored, you started this run yourself (it had {left // 60} min left)"); left = 0
+    if left:  # a cooldown is running: no YouTube searches or downloads, but Twitch clips do not need YouTube
+        if cfg.get("twitch_clips") == "off" or not (creators or trending_on):
+            progress(100, f"Paused: YouTube asked to confirm 'not a bot', retrying in {left // 60} min. Sign in to YouTube in Accounts, or press Run now to try again"); log(f"YOUTUBE BLOCK: waiting {left // 60} more minutes before touching YouTube again"); return 0
+        YT_OFF = True; log(f"YOUTUBE BLOCK: {left // 60} min left, so only Twitch clips are used in this run")
     try:  # yt-dlp must be current before any YouTube work: check PyPI first (at most every 6 h; installs + self-tests + rolls back on failure)
         import update_ytdlp
         update_ytdlp.main(before_run=True)
@@ -1080,7 +1086,7 @@ def _main():
     # 1) the user's list, in order (YouTube videos)
     if tw_only:
         log("Twitch clips only: YouTube videos of your streamers are skipped")
-    for ci, creator in enumerate([] if tw_only else creators[:10]):
+    for ci, creator in enumerate([] if (tw_only or YT_OFF) else creators[:10]):
         progress(10 + ci * 2, f"Looking for {creator}")
         log(f"creator: {creator}")
         vids = creator_videos(creator, skip_ids)
@@ -1097,7 +1103,7 @@ def _main():
         log("trending: looking at what is popular " + ("right now (any topic)" if TP["any"] else "for " + TP["name"]))
         skip_ch |= {norm(c) for c in creators}  # those were already tried above
         skip_ids = skip_ids - ({a.only} if a.only else set())
-        vids = ([] if tw_off else search_twitch_clips(skip_ids)) + ([] if tw_only else search_trending(skip_ch, skip_ids))  # viewer-made Twitch clips first (already picked by viewers)
+        vids = ([] if tw_off else search_twitch_clips(skip_ids)) + ([] if (tw_only or YT_OFF) else search_trending(skip_ch, skip_ids))  # viewer-made Twitch clips first (already picked by viewers)
         vids = [v for v in vids if v["id"] not in seen]  # the Twitch clips above were already judged
         vids = [v for v in vids if v["id"] == a.only] if a.only else vids
         log(f"  {len(vids)} trending candidates: " + ", ".join(v["channel"] for v in vids))
@@ -1119,6 +1125,9 @@ def _main():
     if ASR_FAILS >= 2:
         progress(-1, "Failed: the speech recognition (Whisper) cannot run on this PC. See the log for the error and open an issue on GitHub with it")
         log("FAILED: the speech recognition cannot run on this PC, so no video could be analysed"); return 3
+    if YT_OFF:
+        progress(100, f"Paused: YouTube asked to confirm 'not a bot' (retrying in {yt_blocked() // 60} min); no good Twitch clip was found. Sign in to YouTube in Accounts, or press Run now to try again")
+        return 0
     progress(100, "Skipped: no strong moment found right now")
     log("no strong moment found; nothing posted")
     return 0

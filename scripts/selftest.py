@@ -1544,6 +1544,48 @@ def test_a_run_stops_when_the_speech_recognition_cannot_run_here():
         autorun.sh, autorun.log, autorun.note_block, autorun.ASR_FAILS = saved
 
 
+def test_a_youtube_pause_does_not_end_every_run():
+    """YouTube asked to confirm 'not a bot' (3 h pause): Run now tries again; an automatic run still uses Twitch clips; only YouTube-only setups stop."""
+    import json, shutil, tempfile, types, time as tm
+    tmp = Path(tempfile.mkdtemp())
+    names = ["R", "BLOCK_F", "progress", "creator_twitch_clips", "search_twitch_clips", "search_creator", "search_trending", "try_videos", "flush", "review_ids", "cut_pending", "log", "YT_OFF"]
+    saved = {k: getattr(autorun, k) for k in names}
+    saved_mod, saved_fit, saved_argv = sys.modules.get("update_ytdlp"), learn.fit, sys.argv
+    calls, msgs = [], []
+    def run(cfg, manual):
+        calls.clear(); msgs.clear(); autorun.YT_OFF = False
+        (tmp / "autopost_config.json").write_text(json.dumps({"creators": ["A"], "use_trending_fallback": True, "auto_post": False, "topic": "GTA 6", "languages": ["en"], **cfg}), encoding="utf-8")
+        (tmp / "yt_block.json").write_text(json.dumps({"until": tm.time() + 3600}), encoding="utf-8")
+        sys.argv = ["autorun.py", "--force"] + (["--manual"] if manual else [])
+        code = autorun._main()
+        return code, [c[0] for c in calls], list(msgs)
+    try:
+        autorun.R, autorun.BLOCK_F = tmp, tmp / "yt_block.json"
+        autorun.progress = lambda pct, m: msgs.append(m)
+        autorun.review_ids = lambda: set(); autorun.flush = lambda dry: None; autorun.cut_pending = lambda dry: None; autorun.log = lambda *a, **k: None
+        autorun.creator_twitch_clips = lambda c, ids, top=3, period="LAST_WEEK": calls.append(("tw_creator",)) or []
+        autorun.search_twitch_clips = lambda ids: calls.append(("tw_trending",)) or []
+        autorun.search_creator = lambda c, days=3, n=15, keep=8: calls.append(("yt_creator",)) or []
+        autorun.search_trending = lambda ch, ids: calls.append(("yt_trending",)) or []
+        autorun.try_videos = lambda *a, **k: None
+        sys.modules["update_ytdlp"] = types.SimpleNamespace(main=lambda **k: None)
+        learn.fit = lambda: None
+        code, kinds, m = run({"twitch_clips": "first"}, manual=True)
+        assert "yt_creator" in kinds and not (tmp / "yt_block.json").exists(), (kinds)                    # Run now ignores the pause and tries YouTube again
+        code, kinds, m = run({"twitch_clips": "first"}, manual=False)
+        assert "yt_creator" not in kinds and "yt_trending" not in kinds and "tw_creator" in kinds, kinds    # an automatic run goes on with Twitch clips only
+        assert any(x.startswith("Paused:") for x in m), m
+        code, kinds, m = run({"twitch_clips": "off"}, manual=False)
+        assert kinds == [] and m and m[-1].startswith("Paused:"), (kinds, m)                                # YouTube-only: nothing else to use, so it waits
+    finally:
+        for k, v in saved.items():
+            setattr(autorun, k, v)
+        if saved_mod is None: sys.modules.pop("update_ytdlp", None)
+        else: sys.modules["update_ytdlp"] = saved_mod
+        learn.fit, sys.argv = saved_fit, saved_argv
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

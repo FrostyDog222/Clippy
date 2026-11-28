@@ -32,7 +32,7 @@ def read_cfg():
             if secretstore.exists("title_api_key") and not secretstore.exists("key_p1"):
                 secretstore.save("key_p1", secretstore.load("title_api_key"))
     c.setdefault("live_watch", False); c.setdefault("live_max_streams", 3); c.setdefault("ai_check", False); c.setdefault("quality", "strict")
-    c.setdefault("twitch_clips", "first"); c.setdefault("twitch_period", "week"); c.setdefault("twitch_per_streamer", 6); c.setdefault("videos_per_creator", 5); c.setdefault("twitch_priority", False); c.setdefault("ai_examples", False)  # Twitch clips (made by viewers): where to look, how far back, how many per streamer
+    c.setdefault("twitch_clips", "first"); c.setdefault("twitch_period", "week"); c.setdefault("twitch_per_streamer", 6); c.setdefault("videos_per_creator", 5); c.setdefault("youtube_cookies", True); c.setdefault("twitch_priority", False); c.setdefault("ai_examples", False)  # Twitch clips (made by viewers): where to look, how far back, how many per streamer
     return c
 
 
@@ -1835,6 +1835,12 @@ def update_loop():
             update_run("check")
             if update_info().get("available") and read_cfg().get("auto_update", True) and not run_alive() and not running():
                 update_run("apply")
+                for _ in range(20):  # the new code is on disk: restart the dashboard by itself (open pages reload on their own), as soon as no clip is being posted from this page
+                    if not restart_wanted():
+                        break
+                    if not any((x or {}).get("state") == "posting" for x in REVIEW_STATUS.values()):
+                        restart_self()
+                    time.sleep(30)
         except Exception:
             pass
         time.sleep(6 * 3600)
