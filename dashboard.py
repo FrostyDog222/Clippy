@@ -1511,7 +1511,7 @@ class H(http.server.BaseHTTPRequestHandler):
             log = log_text()
             return self.send(200, json.dumps({"config": c, "paused": PAUSE.exists(), "checks": checks(),
                                               "today": [p for p in posts if p.get("date") == today and not p.get("deleted")], "log": log,
-                                              "progress": progress(), "signin": signin_state(), "browser": getattr(__import__("upload"), "BROWSER_NAME", None), "live_run": live_run_active(), "jobs_mb": cleanup.jobs_mb(), "all_languages": textutil.LANGS, "perf": perf(), "ai_keys": {p["id"]: secretstore.exists(f"key_{p['id']}") for p in c.get("ai_profiles", [])}, "blocked": blocked_msg(c), "live": live_status(),
+                                              "progress": progress(), "signin": signin_state(), "browser": getattr(__import__("upload"), "BROWSER_NAME", None), "live_run": live_run_active(), "whisper_medium": common.whisper_cached("medium"), "fix": {"what": FIX["what"], "state": FIX["state"], "msg": FIX["msg"]}, "jobs_mb": cleanup.jobs_mb(), "all_languages": textutil.LANGS, "perf": perf(), "ai_keys": {p["id"]: secretstore.exists(f"key_{p['id']}") for p in c.get("ai_profiles", [])}, "blocked": blocked_msg(c), "live": live_status(),
                                               "review": review_items(), "run_stale": run_stale(), "autostart": autostart_state(), "health": health_info(), "run_timing": run_timing(), "run_suspended": run_suspended(),
                                               "update": update_info(), "learn": learn_info(), "boot": BOOT, "restart_needed": restart_wanted(), "html": int((R / "dashboard.html").stat().st_mtime),
                                               "runlog": log_text(8000, 8000),  # the Current run log: the live watcher's log while live watching is on, else the last run's
@@ -2008,8 +2008,8 @@ def health_info():
             try:
                 langs = c.get("languages", ["en"])
                 langs = [langs] if isinstance(langs, str) else list(langs or [])
-                if langs and langs != ["en"] and not common.whisper_cached("medium"):
-                    wl = textutil.LANGS.get(next((x for x in langs if x != "en"), ""), "your language")
+                if langs != ["en"] and not common.whisper_cached("medium"):  # any language other than English (an empty list = any language)
+                    wl = textutil.LANGS.get(next((x for x in langs if x != "en"), ""), "other languages")
             except Exception:
                 wl = None
             items = health.checks(c, signin_state(), update_info(), free, len(waiting_clips()), have, yt_limit_text(), yt_block_min=yt_block_minutes(), whisper_lang=wl)

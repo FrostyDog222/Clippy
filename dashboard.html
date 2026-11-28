@@ -267,6 +267,7 @@ details summary{cursor:pointer;color:var(--mut);font-size:14px}pre{white-space:p
   </div>
   <div class="f" style="margin-bottom:14px"><span style="display:block;text-align:center;font-size:12px;color:var(--mut);margin-bottom:5px">Video languages (anything else is skipped; trending searches look for creators who speak them)</span>
     <div class="chips" id="langs"></div>
+    <div class="hint" id="langnote" style="display:none;margin-top:8px;line-height:1.6"></div>
     <small style="color:var(--mut);font-size:12px;display:block;text-align:center">The language is detected from the speech. Pick one or more, or "Any language" for no filter. English works best. Other languages work too (captions use a font that can draw the script; reaction words are known for 15 languages), but Clippy only trusts a language it is 80% sure of: when it is less sure and the words do not look English, the clip gets no captions and waits for you (&#9888; language unsure). A moment counts when at least 25% of its words are in a language you picked, so a streamer switching between their language and English works. Every clip has a &quot;Rebuild without captions&quot; button. <b>Heads up:</b> English works fine; other languages are not fully tested and can fail (wrong or missing captions, a missed moment). Please check those clips before posting.</small></div>
   <label class="chk" style="display:flex;align-items:flex-start;gap:10px;margin:10px 0 4px;cursor:pointer"><input type="checkbox" id="ai_examples" style="margin-top:3px"><span>Show the AI examples of <b>your</b> taste: a few clips you liked and disliked, as one short description each (with the funny line for liked clips and your reasons for disliked ones). It judges against what you found funny. Off by default. Only these short descriptions are sent to your AI provider, never a transcript.</span></label>
   <label class="f"><span>Who writes the titles</span><select id="title_writer" style="width:100%;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font:inherit">
@@ -468,7 +469,13 @@ $('aitest').textContent=j.ok?'Works: answered "'+j.text+'" in '+j.ms+' ms':'Fail
 const LANGSET=window.LANGSET={};
 function renderLangs(){const sel=draft.languages=Array.isArray(draft.languages)?draft.languages:(draft.languages==='any'?[]:[draft.languages||'en']);
 let o='<span class="chip opt '+(sel.length?'':'sel')+'" onclick="pickLang(\'\')">Any language</span>';
-Object.entries(LANGSET).forEach(([c,n])=>o+='<span class="chip opt '+(sel.includes(c)?'sel':'')+'" onclick="pickLang(\''+c+'\')">'+n+'</span>');$('langs').innerHTML=o}
+Object.entries(LANGSET).forEach(([c,n])=>o+='<span class="chip opt '+(sel.includes(c)?'sel':'')+'" onclick="pickLang(\''+c+'\')">'+n+'</span>');$('langs').innerHTML=o;langNote()}
+// A language other than English is better recognised with the medium speech model: say so right here (one-time download, asked first)
+function langNote(){const e=$('langnote');if(!e||!draft)return;const L=draft.languages||[],non=L.length===0||L.some(x=>x!=='en');const f=(srv&&srv.fix)||{};const dl=f.what==='whisper'&&f.state==='running';
+if(!non||!srv){e.style.display='none';return}
+const nm=L.length===1?(LANGSET[L[0]]||'this language'):'these languages';
+if(srv.whisper_medium){e.style.display='block';e.innerHTML='&#10003; The bigger speech model is installed: '+esc(nm)+' is recognised with it.';return}
+e.style.display='block';e.innerHTML=dl?'Downloading the bigger speech model... this takes a few minutes (about 1.5 GB). Clippy uses the small one until it is done.':'<b>'+esc(nm[0].toUpperCase()+nm.slice(1))+'</b> is recognised much better with a bigger speech model (one-time download, about 1.5 GB). Until then Clippy uses the small one, which mishears a lot. <button class="btn" type="button" onclick="hcInstall(\'whisper\')" style="margin-left:6px">Download</button>'+(f.what==='whisper'&&f.state==='failed'?'<div style="color:var(--bad);margin-top:4px">'+esc(f.msg||'The download failed.')+'</div>':'')}
 function pickLang(c){if(!c)draft.languages=[];else{const i=draft.languages.indexOf(c);i>=0?draft.languages.splice(i,1):draft.languages.push(c)}renderLangs();chg()}
 function setCS(){draft.cleanup_sources=draft.cleanup_sources===false;$('cs').className='tg'+(draft.cleanup_sources!==false?' on':'');chg()}
 function setQT(){draft.quality=draft.quality==='strict'?'relaxed':'strict';$('qt').className='tg'+(draft.quality==='strict'?' on':'');chg()}
@@ -597,7 +604,7 @@ visShow();
 {const s=d.signin||{},b=s.busy,set=(dot,t,v)=>{dot.className='dot '+(v===true?'on':v===false?'bad':'');t.textContent=b?'Checking...':v===true?'Signed in':v===false?'Needs sign in':'Not checked'};
 set($('yd'),$('yt'),s.youtube);set($('td'),$('tk'),s.tiktok);
 $('sib').disabled=$('scb').disabled=!!b;$('sbh').innerHTML=(d.browser?'Clippy uses <b>'+esc(d.browser)+'</b> for this (it needs Google Chrome or Microsoft Edge on this PC). ':'<b>No browser found.</b> Clippy needs Google Chrome or Microsoft Edge (Edge comes with Windows 10 and 11). Install one and restart Clippy. ')+'"Sign in" opens a separate window of it: log in to YouTube and TikTok yourself, then close the window. You only do this once; the login is saved and reused, until a site expires it.';$('sih').textContent=b==='login'?'Sign-in window is open. Close it when you are done and I will re-check.':b==='check'?'Checking both accounts (about 15 seconds)...':s.ts?'Last checked '+s.ts.replace('T',' '):''}
-srvKeys=d.ai_keys||{};keyst();renderReview(d.review||[],d.mode);$('jmb').textContent=d.jobs_mb>=1000?(d.jobs_mb/1000).toFixed(1)+' GB':d.jobs_mb+' MB';
+srvKeys=d.ai_keys||{};keyst();srv.whisper_medium=d.whisper_medium;srv.fix=d.fix;try{langNote()}catch(e){}renderReview(d.review||[],d.mode);$('jmb').textContent=d.jobs_mb>=1000?(d.jobs_mb/1000).toFixed(1)+' GB':d.jobs_mb+' MB';
 $('chk').innerHTML=d.checks.map(x=>'<div class="'+(x[1]?'ok':'no')+'">'+(x[1]?'✓':'✗')+' '+x[0]+'</div>').join('');
 lastToday=d.today.slice().reverse();renderToday();
 {const P=d.perf||{rows:[],insights:[]},fm=x=>x==null?'-':x;
