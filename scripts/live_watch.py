@@ -273,6 +273,14 @@ def write_progress(watches, posted, want, last, prepare_only, done=False):
 
 
 PIDF = R / "live_watch.pid"
+RUN = R / "live_run.json"  # exists while a live run is going (written by the dashboard: Run now / Autopilot); the watcher stops when it is gone
+
+
+def run_info():
+    try:
+        return json.loads(RUN.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 
 def pid_alive(pid):
@@ -323,8 +331,8 @@ def main():
     try:
         while True:
             cfg = cfg_now()
-            if not cfg.get("live_watch") or (R / "PAUSED.txt").exists():
-                log("switched off or paused: stopping"); break
+            if not RUN.exists() or (R / "PAUSED.txt").exists():
+                log("the live run ended (or paused): stopping"); break
             autorun.configure(cfg)
             cmdf = R / "live_cmd.json"
             if cmdf.exists():  # the user pressed Change on a streamer in the dashboard: only a click writes this file
@@ -388,7 +396,7 @@ def main():
             if queue:
                 st = json.loads((R / "autopost_state.json").read_text(encoding="utf-8")) if (R / "autopost_state.json").exists() else {"posts": []}
                 ok, why, _ = tick.decide(cfg, st.get("posts", []), dt.datetime.now(), False, gap=bool(cfg.get("auto_post")))  # same posting window and daily limit as everything else; the gap only matters when it posts by itself
-                by = cfg.get("live_by") or ("auto" if (cfg.get("autopilot") or cfg.get("auto_post")) else "manual")
+                by = run_info().get("by") or ("auto" if (cfg.get("autopilot") or cfg.get("auto_post")) else "manual")
                 ok = ok or a.force or by == "manual"  # the schedule (window, daily limit, gap) only applies to automation (started by Autopilot); a live run you started yourself ignores it
                 if ok:
                     today = dt.datetime.now().strftime("%Y-%m-%d")
@@ -416,20 +424,28 @@ def main():
                             f.unlink(missing_ok=True)  # the spike clip is no longer needed (the finished Short is kept by cleanup.py rules)
                         log(last)
             write_status(watches, queue, posted, last)
-            want = max(1, int(cfg.get("live_target") or cfg.get("clips_per_run", 1) or 1))
+            want = max(1, int(run_info().get("target") or cfg.get("clips_per_run", 1) or 1))
             write_progress(watches, posted, want, last, not cfg.get("auto_post", False))
             if not cfg.get("auto_post", False) and posted >= want:  # prepare-only live mode: "clips this run" is how many clips it makes, then it switches itself off
-                log(f"{posted} clip(s) ready (the number you chose for this run): live mode switches itself off")
-                c2 = cfg_now(); c2["live_watch"] = False
-                (R / "autopost_config.json").write_text(json.dumps(c2, indent=2), encoding="utf-8")
+                log(f"{posted} clip(s) ready (the number you chose for this run): the live run ends")
+                RUN.unlink(missing_ok=True)  # the run is over (your Settings are not touched)
                 last = f"done: {posted} clip(s) are in Ready to post"; write_progress(watches, posted, want, last, True, done=True); break
             time.sleep(10)
     finally:
         for w in watches:
             w.stop()
             for f in list(w.dir.glob("seg_*.ts")) + [w.dir / "segments.csv"]:
-                f.unlink(missing_ok=True)
+                try:
+                    f.unlink(missing_ok=True)
+                except OSError:
+                    pass  # the recorder was only just killed and still holds the file: the next cleanup removes it
         write_status([], [], posted, "stopped")
+        try:  # the run is over: the dashboard must not keep showing "Running..." (it would refuse Clean up and other actions for the next 45 minutes)
+            pf = R / "progress.json"; pr = json.loads(pf.read_text(encoding="utf-8"))
+            if 0 < pr.get("pct", 0) < 100:
+                pf.write_text(json.dumps({"pct": 100, "msg": f"Done: the live run ended ({posted} clip(s) made)", "ts": dt.datetime.now().isoformat(timespec="seconds")}), encoding="utf-8")
+        except Exception:
+            pass
         log("live watcher stopped")
     return 0
 

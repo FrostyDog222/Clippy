@@ -119,11 +119,11 @@ def age_days(vid):
         return 3
 
 
-def flat_search(query):
-    c = _cache(); key = f"search:{query}"; hit = c.get(key)
+def flat_search(query, n=15):
+    c = _cache(); key = f"search:{query}" if n == 15 else f"search:{n}:{query}"; hit = c.get(key)
     if hit and time.time() - hit["t"] < 1800:  # the same search within 30 min reuses the answer (fewer requests, fewer blocks)
         return hit["entries"]
-    r = sh([PY, "-m", "yt_dlp", "--no-warnings", *youtube_cookie_args(), "--flat-playlist", "-J", f"ytsearch15:{query}"])
+    r = sh([PY, "-m", "yt_dlp", "--no-warnings", *youtube_cookie_args(), "--flat-playlist", "-J", f"ytsearch{n}:{query}"])
     note_block(r.stderr)
     try:
         entries = json.loads(r.stdout).get("entries", [])
@@ -146,18 +146,33 @@ def usable(e):
     return {"id": e["id"], "title": t, "channel": e.get("channel") or e.get("uploader") or "?", "duration": e["duration"], "views": e.get("view_count") or 0}
 
 
-def search_creator(creator, days=3):
+def search_creator(creator, days=3, n=15, keep=8):
     out = []
-    for e in flat_search(TP["creator_query"](creator)):
+    for e in flat_search(TP["creator_query"](creator), n):
         ch = e.get("channel") or e.get("uploader") or ""
         if ch and (norm(creator) in norm(ch) or norm(ch) in norm(creator)):
             v = usable(e)
             if v:
                 out.append(v)
-    out = sorted(out, key=lambda x: (x["duration"] > 3 * 3600, -x["views"]))[:8]  # the caller drops used/rejected ones, so look a bit further down the list
+    out = sorted(out, key=lambda x: (x["duration"] > 3 * 3600, -x["views"]))[:keep]  # the caller drops used/rejected ones, so look a bit further down the list
     out = [v for v in out if recent(v["id"], days)]
     out.sort(key=lambda x: (x["duration"] > 3 * 3600, -x["views"] / (age_days(x["id"]) + 0.5)))  # fresh and popular first: views per day since upload, not total views
     return out
+
+
+def creator_videos(creator, skip_ids):
+    """The videos / VODs of one streamer to look at: up to "Videos to check per streamer" (Settings, default 5), the freshest and most popular first. When the last 3 days
+    hold fewer than that, the search goes back 7 and then 14 days, so a streamer with few new uploads is still checked properly before Clippy moves on."""
+    try:
+        per = max(1, min(10, int(CFG.get("videos_per_creator", 5) or 5)))
+    except (TypeError, ValueError):
+        per = 5
+    vids = []
+    for days in (3, 7, 14):
+        vids = [v for v in search_creator(creator, days, 30, 2 * per + 4) if v["id"] not in skip_ids][:per]
+        if len(vids) >= min(per, 4):
+            break
+    return vids
 
 
 def search_twitch_clips(skip_ids):
@@ -991,8 +1006,6 @@ def _main():
     if not creators and not trending_on:
         progress(-1, "No streamers in the list and trending is OFF: nothing to post. Add a streamer or turn trending on")
         log("BLOCKED: no streamers and trending is OFF"); return 3
-    if cfg.get("live_watch") and not a.force:  # the live switch decides the source: ON = live streams only (live_watch.py), OFF = videos only
-        progress(100, "Skipped: live mode is ON (live streams only)"); log("NOT RUN: live mode is ON, videos are not used"); return 0
     now = dt.datetime.now()
     if not a.force:
         ok, why, _ = tick.decide(cfg, st["posts"], now, (R / "PAUSED.txt").exists(), gap=bool(cfg.get("auto_post")))  # the gap only matters for posting by itself
@@ -1061,9 +1074,7 @@ def _main():
     for ci, creator in enumerate([] if tw_only else creators[:10]):
         progress(10 + ci * 2, f"Looking for {creator}")
         log(f"creator: {creator}")
-        vids = [v for v in search_creator(creator) if v["id"] not in skip_ids][:3]
-        if len(vids) < 2:  # few fresh videos: look a few days further back so there are more options
-            vids = [v for v in search_creator(creator, 7) if v["id"] not in skip_ids][:3]
+        vids = creator_videos(creator, skip_ids)
         log(f"  {len(vids)} videos to look at")
         code = try_videos(vids, st, sf, a.dry, 25, creator)
         if code is not None:

@@ -630,14 +630,16 @@ def test_manual_and_automation_choose_their_source_separately():
     assert new["run_source"] == "video" and new["auto_source"] == "live"                 # manual on videos, automation on live streams
     assert d.clean({**old, "run_source": "junk"}, {**old, "run_source": "live"})["run_source"] == "live"   # a bad value keeps the old one
     assert d.clean({k: v for k, v in old.items() if k not in ("run_source", "auto_source")}, {k: v for k, v in old.items() if k not in ("run_source", "auto_source")})["auto_source"] == "video"
-    keep = d.CFG; d.CFG = Path(tempfile.mkdtemp()) / "c.json"
+    keep = (d.CFG, d.LIVE_RUN, d.spawn_live); tmp = Path(tempfile.mkdtemp()); d.CFG, d.LIVE_RUN = tmp / "c.json", tmp / "live_run.json"
+    spawned = []; d.spawn_live = lambda: spawned.append(1)   # (never start a real watcher from a test)
     try:
-        d.save_cfg({**old}); d.start_live("manual", 5)
-        c = json.loads(d.CFG.read_text(encoding="utf-8"))
-        assert c["live_watch"] is True and c["live_by"] == "manual" and c["live_target"] == 5
-        d.start_live("auto", 99); assert json.loads(d.CFG.read_text(encoding="utf-8"))["live_target"] == 10 and json.loads(d.CFG.read_text(encoding="utf-8"))["live_by"] == "auto"
+        d.save_cfg({**old}); before = json.loads(d.CFG.read_text(encoding="utf-8")).get("live_watch"); d.start_live("manual", 5)
+        r = json.loads(d.LIVE_RUN.read_text(encoding="utf-8"))
+        assert r["by"] == "manual" and r["target"] == 5 and spawned == [1]                 # a live RUN is a file + a watcher ...
+        assert json.loads(d.CFG.read_text(encoding="utf-8")).get("live_watch") == before   # ... and no setting is changed by it
+        d.start_live("auto", 99); r = json.loads(d.LIVE_RUN.read_text(encoding="utf-8")); assert r["target"] == 10 and r["by"] == "auto"
     finally:
-        d.CFG = keep
+        d.CFG, d.LIVE_RUN, d.spawn_live = keep
 
 
 def test_clips_you_looked_at_do_not_count_as_waiting():
@@ -714,8 +716,8 @@ def test_live_log_clear_never_leaves_nul_bytes():
     keep = d.R; tmp = Path(tempfile.mkdtemp()); d.R = tmp
     try:
         (tmp / "live_watch.log").write_bytes(b"22:00:00 live watcher started" + bytes([10]) + b"old line" + bytes([10]))
-        (tmp / "autopost_config.json").write_text('{"live_watch": true}')
-        d.CFG = tmp / "autopost_config.json"
+        (tmp / "autopost_config.json").write_text('{"live_watch": false}')
+        d.CFG = tmp / "autopost_config.json"; d.LIVE_RUN = tmp / "live_run.json"; d.LIVE_RUN.write_text("{}")   # a live run is going
         assert "old line" in d.log_text() or True
         (tmp / "live_log_mark.txt").write_text(str((tmp / "live_watch.log").stat().st_size))          # "Clear log" moves the mark
         with open(tmp / "live_watch.log", "ab") as fh:
@@ -723,24 +725,23 @@ def test_live_log_clear_never_leaves_nul_bytes():
         t = d.log_text()
         assert "new line" in t and "old line" not in t and chr(0) not in t, repr(t)
     finally:
-        d.R = keep; d.CFG = keep / "autopost_config.json"
+        d.R = keep; d.CFG = keep / "autopost_config.json"; d.LIVE_RUN = keep / "live_run.json"
 
 
 def test_current_run_log_shows_the_live_log_while_live_is_on():
     import sys, tempfile, json
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import dashboard as d
-    keep = (d.R, d.CFG, d.LOG, d.LIVE_STATUS); tmp = Path(tempfile.mkdtemp())
-    d.R, d.CFG, d.LOG, d.LIVE_STATUS = tmp, tmp / "c.json", tmp / "autorun.log", tmp / "no_live_status.json"   # (not the real watcher's status file)
+    keep = (d.R, d.CFG, d.LOG, d.LIVE_STATUS, d.LIVE_RUN); tmp = Path(tempfile.mkdtemp())
+    d.R, d.CFG, d.LOG, d.LIVE_STATUS, d.LIVE_RUN = tmp, tmp / "c.json", tmp / "autorun.log", tmp / "no_live_status.json", tmp / "live_run.json"   # (not the real watcher's files)
     try:
         (tmp / "autorun.log").write_text("old video run line", encoding="utf-8"); (tmp / "live_watch.log").write_text("10:00:00 live watcher started" + chr(10) + "10:01:00 chat spike on x", encoding="utf-8")
-        d.CFG.write_text(json.dumps({"live_watch": False}))
-        assert "old video run line" in d.log_text(8000, 8000)                               # live off: the normal run log
-        d.CFG.write_text(json.dumps({"live_watch": True}))
+        assert "old video run line" in d.log_text(8000, 8000)                               # no live run: the normal run log
+        d.LIVE_RUN.write_text("{}")
         t = d.log_text(8000, 8000)
-        assert "chat spike on x" in t and "old video run line" not in t                       # live on: the live watcher's log
+        assert "chat spike on x" in t and "old video run line" not in t                       # a live run: the live watcher's log
     finally:
-        d.R, d.CFG, d.LOG, d.LIVE_STATUS = keep
+        d.R, d.CFG, d.LOG, d.LIVE_STATUS, d.LIVE_RUN = keep
 
 
 def test_live_watcher_swaps_quiet_streams_for_better_ones():
@@ -1402,7 +1403,7 @@ def test_where_to_look_modes_decide_which_sources_a_run_uses():
         autorun.log = lambda *a, **k: None
         autorun.creator_twitch_clips = lambda c, ids, top=3, period="LAST_WEEK": calls.append(("tw_creator", c, top, period)) or []
         autorun.search_twitch_clips = lambda ids: calls.append(("tw_trending",)) or []
-        autorun.search_creator = lambda c, days=3: calls.append(("yt_creator", c)) or []
+        autorun.search_creator = lambda c, days=3, n=15, keep=8: calls.append(("yt_creator", c)) or []
         autorun.search_trending = lambda ch, ids: calls.append(("yt_trending",)) or []
         autorun.try_videos = lambda *a, **k: None
         sys.modules["update_ytdlp"] = types.SimpleNamespace(main=lambda **k: None)
@@ -1472,6 +1473,33 @@ def test_only_one_live_watcher_can_run():
     assert not d._pid_alive(f)
     f.write_text(str(os.getpid())); assert d._pid_alive(f)
     f.write_text("4000000"); assert not d._pid_alive(f)
+
+
+def test_a_streamer_gets_more_videos_checked_when_there_are_few_fresh_ones():
+    saved = autorun.search_creator, autorun.CFG
+    seen = []
+    mk = lambda i: {"id": f"v{i}", "title": "t", "channel": "X", "duration": 900, "views": 100 - i}
+    try:
+        def fake(c, days=3, n=15, keep=8):
+            seen.append((days, n, keep))
+            return [mk(i) for i in range({3: 1, 7: 2, 14: 6}[days])]    # 1 video in 3 days, 2 in 7, 6 in 14
+        autorun.search_creator = fake; autorun.CFG = {"videos_per_creator": 5}
+        got = autorun.creator_videos("X", set())
+        assert [d for d, _, _ in seen] == [3, 7, 14] and len(got) == 5, (seen, got)          # went back until there were enough, and no more than 5
+        assert all(n == 30 and k == 14 for _, n, k in seen)                                  # a deeper search (30 results) and room to filter
+        seen.clear(); autorun.CFG = {"videos_per_creator": 2}
+        assert len(autorun.creator_videos("X", {"v0"})) == 2 and [d for d, _, _ in seen] == [3, 7, 14]   # a used video is skipped, so it went back to 14 days to find 2
+        seen.clear(); autorun.CFG = {}
+        assert len(autorun.creator_videos("X", set())) == 5                                  # default 5
+    finally:
+        autorun.search_creator, autorun.CFG = saved
+
+
+def test_the_restart_helper_is_valid_and_starts_the_dashboard_again():
+    import dashboard as d
+    src = d.restart_helper_source()
+    compile(src, "helper", "exec")
+    assert "dashboard.py" in src and "raise SystemExit" in src and "range(3)" in src      # starts it, checks it answers, tries again when it does not
 
 
 if __name__ == "__main__":

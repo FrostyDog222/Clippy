@@ -32,7 +32,7 @@ def read_cfg():
             if secretstore.exists("title_api_key") and not secretstore.exists("key_p1"):
                 secretstore.save("key_p1", secretstore.load("title_api_key"))
     c.setdefault("live_watch", False); c.setdefault("live_max_streams", 3); c.setdefault("ai_check", False); c.setdefault("quality", "strict")
-    c.setdefault("twitch_clips", "first"); c.setdefault("twitch_period", "week"); c.setdefault("twitch_per_streamer", 6); c.setdefault("twitch_priority", False); c.setdefault("ai_examples", False)  # Twitch clips (made by viewers): where to look, how far back, how many per streamer
+    c.setdefault("twitch_clips", "first"); c.setdefault("twitch_period", "week"); c.setdefault("twitch_per_streamer", 6); c.setdefault("videos_per_creator", 5); c.setdefault("twitch_priority", False); c.setdefault("ai_examples", False)  # Twitch clips (made by viewers): where to look, how far back, how many per streamer
     return c
 
 
@@ -208,8 +208,9 @@ def failed_run_switches_autopilot_off(p):
 
 def stop_runs():
     """Stop now: kill the run and everything it started (downloads, analysis, cutting, uploads) for good: there is no resuming it (that is what Pause is for).
-    Autopilot stays ON (it is your switch) but waits HOLD_MIN minutes before its next automatic run, so Stop is not undone a minute later; live mode is switched off."""
-    c = read_cfg(); c["live_watch"] = False; save_cfg(c)
+    Autopilot stays ON (it is your switch) but waits HOLD_MIN minutes before its next automatic run, so Stop is not undone a minute later; a live run is ended too."""
+    c = read_cfg()
+    LIVE_RUN.unlink(missing_ok=True)  # a live run ends; the Settings switch "Live mode" is yours and is not touched
     HOLD.write_text(str(time.time() + HOLD_MIN * 60))
     try:  # the whole tree under the run (moments, yt-dlp, ffmpeg ... even the ones the name search below cannot see)
         subprocess.run(["taskkill", "/PID", str(_run_pid()), "/T", "/F"], creationflags=NOWIN, capture_output=True)
@@ -322,19 +323,41 @@ def restart_wanted():
     return code_sig() != START_SIG
 
 
-def restart_self():
-    """Hard restart: a tiny helper process (no window, survives this one) waits until this dashboard has let go of the port, then starts a fresh dashboard; then this one exits.
-    Runs that are already going (their own processes) and the saved settings are not touched."""
+def restart_helper_source():
+    """The tiny program that brings the dashboard back after a restart: it waits until the old dashboard has let go of the port, starts a new one and CHECKS that the new one
+    answers; when it does not (it crashed, or something took the port), it starts it again (3 tries), so a restart does not end with nothing running."""
     lines = ["import socket, subprocess, time",
-             "time.sleep(1.0)",
-             "for _ in range(60):",
+             "def free():",
              "    s = socket.socket()",
              "    try:",
-             f"        s.bind(('127.0.0.1', {PORT})); s.close(); break",
+             f"        s.bind(('127.0.0.1', {PORT})); return True",
              "    except OSError:",
-             "        s.close(); time.sleep(0.5)",
-             f"subprocess.Popen([{BGPY!r}, 'dashboard.py'], cwd={str(R)!r}, creationflags=0x08000000 | 0x00000008, close_fds=True)"]
-    helper = chr(10).join(lines)
+             "        return False",
+             "    finally:",
+             "        s.close()",
+             "def up():",
+             "    try:",
+             f"        socket.create_connection(('127.0.0.1', {PORT}), 1).close(); return True",
+             "    except OSError:",
+             "        return False",
+             "time.sleep(1.0)",
+             "for _ in range(3):",
+             "    for _ in range(60):",
+             "        if free():",
+             "            break",
+             "        time.sleep(0.5)",
+             f"    subprocess.Popen([{BGPY!r}, 'dashboard.py'], cwd={str(R)!r}, creationflags=0x08000000 | 0x00000008, close_fds=True)",
+             "    for _ in range(40):",
+             "        time.sleep(0.5)",
+             "        if up():",
+             "            raise SystemExit"]
+    return chr(10).join(lines)
+
+
+def restart_self():
+    """Hard restart: a tiny helper process (no window, survives this one) waits until this dashboard has let go of the port, then starts a fresh dashboard and checks it came up; then this one exits.
+    Runs that are already going (their own processes) and the saved settings are not touched."""
+    helper = restart_helper_source()
     subprocess.Popen([BGPY, "-c", helper], cwd=R, creationflags=NOWIN | DETACHED, close_fds=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.5)
     try:
@@ -430,7 +453,7 @@ def log_text(limit=2500, run_limit=1500):
     """What the Current run log shows: the live watcher's log while live watching is on (it has its own file), otherwise the log of the last normal run."""
     try:
         lf = R / "live_watch.log"
-        if (live_status() is not None or read_cfg().get("live_watch")) and lf.exists():
+        if (live_status() is not None or live_run_active()) and lf.exists():
             raw = lf.read_bytes()
             try:
                 raw = raw[int((R / "live_log_mark.txt").read_text()):]  # "Clear log" while the watcher runs only moves this mark (emptying the file under a running writer leaves a hole of NUL bytes)
@@ -457,9 +480,10 @@ def log_text(limit=2500, run_limit=1500):
 
 
 def start_live(by, target):
-    """Start the live watcher (the dashboard's live loop launches it): by = "manual" (you pressed Run now: the schedule does not apply) or "auto" (Autopilot: the schedule applies);
+    """Start a live run: write live_run.json (the watcher stops when it is gone) and launch the watcher. Only Run now and Autopilot call this; the Settings switch never does. by = "manual" (you pressed Run now: the schedule does not apply) or "auto" (Autopilot: the schedule applies);
     target = how many clips it makes when Auto-Post is OFF, then it switches itself off."""
-    c = read_cfg(); c["live_watch"] = True; c["live_by"] = by; c["live_target"] = max(1, min(10, int(target))); save_cfg(c)
+    LIVE_RUN.write_text(json.dumps({"by": by, "target": max(1, min(10, int(target))), "ts": time.time()}), encoding="utf-8")
+    spawn_live()
 
 
 def autopilot_loop():
@@ -475,9 +499,9 @@ def autopilot_loop():
                 c["autopilot"] = False; save_cfg(c); continue
             if hold_active():  # you pressed Stop now a few minutes ago
                 continue
-            if running() or c.get("live_watch"):  # live mode ON: the live watcher posts, videos are not used
+            if running() or live_run_active():  # a live run is going: it makes the clips
                 continue
-            if c.get("auto_source") == "live":  # Autopilot clips from live streams (manual runs can still use videos): start the live watcher when the schedule allows
+            if c.get("auto_source") == "live":  # Autopilot clips from live streams (only the "Automation" choice decides)  # Autopilot clips from live streams (manual runs can still use videos): start the live watcher when the schedule allows
                 ok, _, _ = tick.decide(c, sched_posts(c), dt.datetime.now(), PAUSE.exists(), gap=bool(c.get("auto_post")))
                 if ok and (c.get("auto_post") or len(waiting_clips()) < MAX_WAITING):
                     today = dt.date.today().isoformat()
@@ -577,14 +601,31 @@ def _pid_alive(f):
         return False
 
 
+LIVE_RUN = R / "live_run.json"  # exists while a live run is going (written by Run now / Autopilot, removed when the run ends or you press Stop now)
+
+
+def live_run_active():
+    return LIVE_RUN.exists()
+
+
+def spawn_live():
+    """Launch the live watcher process (only one can run: it refuses to start when another is alive)."""
+    if live_status() is not None or _pid_alive(R / "live_watch.pid"):
+        return
+    _live["p"] = subprocess.Popen([BGPY, "scripts/live_watch.py"], cwd=R, creationflags=NOWIN,
+                                  stdout=open(R / "live_watch.log", "a", encoding="utf-8"), stderr=subprocess.STDOUT)
+
+
 def live_loop():
-    """Keeps the live watcher process running while the switch is ON (it exits by itself when switched off)."""
+    """Never starts live watching by itself. It only restarts a watcher that crashed during a live run this dashboard started."""
     while True:
         time.sleep(20)
         try:
-            if read_cfg().get("live_watch") and not PAUSE.exists() and (_live["p"] is None or _live["p"].poll() is not None) and not live_status() and not _pid_alive(R / "live_watch.pid"):
-                _live["p"] = subprocess.Popen([BGPY, "scripts/live_watch.py"], cwd=R, creationflags=NOWIN,
-                                              stdout=open(R / "live_watch.log", "a", encoding="utf-8"), stderr=subprocess.STDOUT)
+            p = _live["p"]
+            if p is not None and p.poll() is not None:
+                _live["p"] = None
+                if p.returncode and live_run_active() and not PAUSE.exists():  # crashed in the middle of a run you started: start it again
+                    spawn_live()
         except Exception:
             pass
 
@@ -633,6 +674,7 @@ def clean(new, old):
     out["trending_any"] = bool(new.get("trending_any", False))
     out["time_format"] = new.get("time_format") if new.get("time_format") in ("12", "24") else "12"  # 12-hour (US) or 24-hour (Europe) times and dates
     out["min_score"] = round(max(1.0, min(10.0, float(new.get("min_score", 7)))) * 2) / 2  # the lowest score a clip may have to be added (default 7, steps of 0.5)
+    out["videos_per_creator"] = max(1, min(10, int(new.get("videos_per_creator", 5) if new.get("videos_per_creator") not in (None, "") else 5)))  # videos / VODs looked at per streamer before moving on
     out["max_hashtags"] = max(0, min(15, int(new.get("max_hashtags", 5) if new.get("max_hashtags") not in (None, "") else 5)))  # the most automatic hashtags per video (0 = none)
     out["display_name"] = re.sub(r"\s+", " ", str(new.get("display_name", ""))).strip()[:40]  # the name in the welcome line
     out["auto_clips_per_run"] = max(1, min(10, int(new.get("auto_clips_per_run", 1) or 1)))  # clips per automatic (Autopilot) run; the manual "clips this run" is saved right away by /api/clips
@@ -1440,7 +1482,7 @@ class H(http.server.BaseHTTPRequestHandler):
             log = log_text()
             return self.send(200, json.dumps({"config": c, "paused": PAUSE.exists(), "checks": checks(),
                                               "today": [p for p in posts if p.get("date") == today and not p.get("deleted")], "log": log,
-                                              "progress": progress(), "signin": signin_state(), "browser": getattr(__import__("upload"), "BROWSER_NAME", None), "jobs_mb": cleanup.jobs_mb(), "all_languages": textutil.LANGS, "perf": perf(), "ai_keys": {p["id"]: secretstore.exists(f"key_{p['id']}") for p in c.get("ai_profiles", [])}, "blocked": blocked_msg(c), "live": live_status(),
+                                              "progress": progress(), "signin": signin_state(), "browser": getattr(__import__("upload"), "BROWSER_NAME", None), "live_run": live_run_active(), "jobs_mb": cleanup.jobs_mb(), "all_languages": textutil.LANGS, "perf": perf(), "ai_keys": {p["id"]: secretstore.exists(f"key_{p['id']}") for p in c.get("ai_profiles", [])}, "blocked": blocked_msg(c), "live": live_status(),
                                               "review": review_items(), "run_stale": run_stale(), "autostart": autostart_state(), "health": health_info(), "run_timing": run_timing(), "run_suspended": run_suspended(),
                                               "update": update_info(), "learn": learn_info(), "boot": BOOT, "restart_needed": restart_wanted(), "html": int((R / "dashboard.html").stat().st_mtime),
                                               "runlog": log_text(8000, 8000),  # the Current run log: the live watcher's log while live watching is on, else the last run's
@@ -1497,6 +1539,11 @@ class H(http.server.BaseHTTPRequestHandler):
                 n = int(json.loads(self.rfile.read(n))["n"]); c = read_cfg(); c["clips_per_run"] = max(1, min(10, n)); save_cfg(c)
             except Exception:
                 return self.send(400, "bad number", "text/plain")
+        elif self.path == "/api/streams":  # "how many live streams to watch at once" (shown on the first page when Live streams is chosen), saved right away
+            try:
+                n = int(json.loads(self.rfile.read(n))["n"]); c = read_cfg(); c["live_max_streams"] = max(1, min(5, n)); save_cfg(c)
+            except Exception:
+                return self.send(400, "bad number", "text/plain")
         elif self.path == "/api/autopost":  # Auto-Post on/off right away (ON: finished clips are posted by Clippy; OFF: they wait in Ready to post)
             c = read_cfg(); c["auto_post"] = not c.get("auto_post", False); save_cfg(c)
         elif self.path == "/api/autopilot":
@@ -1508,23 +1555,16 @@ class H(http.server.BaseHTTPRequestHandler):
                 if (progress() or {}).get("pct", 0) < 0:
                     set_prog(0, "Autopilot on")
             save_cfg(c)
-        elif self.path == "/api/live":
-            c = read_cfg(); c["live_watch"] = not c.get("live_watch", False)
-            if c["live_watch"]:
-                c["live_by"] = "auto" if c.get("autopilot") else "manual"; c["live_target"] = int(c.get("clips_per_run", 1) or 1)
-            if c["live_watch"] and PAUSE.exists():
-                return self.send(409, "Paused: press Pause / resume first", "text/plain")
-            save_cfg(c)
         elif self.path == "/api/run":
             if PAUSE.exists():
                 return self.send(409, "Paused: press Pause / resume first", "text/plain")
-            if read_cfg().get("run_source") == "live":  # a manual run on live streams: the schedule (window, daily limit, gap) does not apply to it
-                if read_cfg().get("live_watch"):
-                    return self.send(409, "Live watching is already running. Press Stop now to end it first.", "text/plain")
+            if read_cfg().get("run_source") == "live":  # a manual run on live streams (only the "Manual runs" choice decides: Videos / VODs or Live streams): the schedule (window, daily limit, gap) does not apply to it
+                if live_run_active():
+                    return self.send(409, "A live run is already going. Press Stop now to end it first.", "text/plain")
                 start_live("manual", int(read_cfg().get("clips_per_run", 1) or 1)); set_prog(1, "Live: watching streams for chat spikes")
                 return self.send(200, "{}")
-            if read_cfg().get("live_watch"):
-                return self.send(409, "Live watching is running. Press Stop now first, or pick Live streams for manual runs.", "text/plain")
+            if live_run_active():
+                return self.send(409, "A live run is going. Press Stop now first.", "text/plain")
             if blocked_msg(read_cfg()):
                 return self.send(409, blocked_msg(read_cfg()), "text/plain")
             run_now(True, int(read_cfg().get("clips_per_run", 1) or 1), manual=True)  # the manual button: run now even outside the schedule, with the "clips this run" number
@@ -1578,12 +1618,20 @@ class H(http.server.BaseHTTPRequestHandler):
         elif self.path == "/api/cleanup":
             if running():
                 return self.send(409, "A run is in progress: wait until it finishes", "text/plain")
-            cleanup.run()
+            n, mb = cleanup.run()
+            left = cleanup.jobs_mb()
+            if n:
+                msg = f"Cleaned up: {n} file(s) deleted, {mb} MB freed. {left} MB are left on disk."
+            elif not read_cfg().get("cleanup_sources", True):
+                msg = "Nothing was deleted: the switch \"Delete source videos once their clips are cut\" is OFF."
+            else:
+                msg = f"Nothing to delete right now. The {left} MB on disk belong to clips made in the last 30 minutes, clips you still keep (the days above) or a run that is working."
+            return self.send(200, json.dumps({"msg": msg}))
         elif self.path == "/api/stop":
             stop_runs()
         elif self.path == "/api/restart":  # hard restart of the dashboard (the new code is loaded); refused while an upload is running
-            if run_alive() and ((R / "post.lock").exists() or any((x or {}).get("state") == "posting" for x in REVIEW_STATUS.values())):
-                return self.send(409, "An upload is running: restart when it has finished", "text/plain")
+            if any((x or {}).get("state") == "posting" for x in REVIEW_STATUS.values()):  # only a clip being posted FROM THIS PAGE lives inside the dashboard and would be cut off; runs, the live watcher and background jobs (stats...) are their own programs and keep going
+                return self.send(409, "An upload is running: Clippy restarts when it has finished", "text/plain")
             self.send(200, "{}")
             threading.Thread(target=restart_self, daemon=True).start()
             return
@@ -2013,6 +2061,8 @@ if __name__ == "__main__":
         secretstore.migrate_all()  # any old plain-text key becomes an encrypted file
     except Exception:
         pass
+    if live_status() is None and not _pid_alive(R / "live_watch.pid"):
+        LIVE_RUN.unlink(missing_ok=True)  # a live run whose watcher is gone is over: a restart never starts watching by itself
     if not os.environ.get("CLIPPY_NOBG"):  # (tests start the server without the background loops)
         threading.Thread(target=ytdlp_loop, daemon=True).start()
         threading.Thread(target=update_loop, daemon=True).start()
