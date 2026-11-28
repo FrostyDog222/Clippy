@@ -146,14 +146,19 @@ def transcribe(wav, d):
 
     def run_on(device):
         model = load_whisper(device, whisper_size())  # the compute type comes from what this PC's device supports; a bigger model for languages other than English
-        segs, tinfo = model.transcribe(pcm, word_timestamps=True, vad_filter=True)
+        big = whisper_size() != "small"  # the bigger model is slow on a CPU: greedy decoding (no beam search) + the language you picked (no detection) is several times faster
+        al0 = allowed_langs()
+        fast = dict(beam_size=1, best_of=1, condition_on_previous_text=False) if big else {}
+        if big and al0 and len(al0) == 1:
+            fast["language"] = al0[0]
+        segs, tinfo = model.transcribe(pcm, word_timestamps=True, vad_filter=True, **fast)
         save_json(d / "lang.json", {"language": tinfo.language, "p": round(float(tinfo.language_probability), 2)})  # English-only pipeline: see main()
         out_words = [{"w": w.word.strip(), "s": round(w.start, 2), "e": round(w.end, 2)} for s in segs for w in (s.words or [])]
         al = allowed_langs()
-        clear = float(tinfo.language_probability) >= 0.9 and al and tinfo.language in al and tinfo.language != "en"  # clearly the language you picked: the second pass would take as long again and gave fewer words
+        clear = ("language" in fast or float(tinfo.language_probability) >= 0.9) and al and tinfo.language in al and tinfo.language != "en"  # clearly the language you picked: the second pass would take as long again and gave fewer words
         if (tinfo.language != "en" or float(tinfo.language_probability) < 0.8) and not clear:  # not clearly English or your language: streamers switch languages mid-speech, so detect the language window by window
             try:
-                segs2, _ = model.transcribe(pcm, word_timestamps=True, vad_filter=True, multilingual=True)
+                segs2, _ = model.transcribe(pcm, word_timestamps=True, vad_filter=True, multilingual=True, **{k: v for k, v in fast.items() if k != "language"})
                 w2 = [{"w": w.word.strip(), "s": round(w.start, 2), "e": round(w.end, 2)} for s in segs2 for w in (s.words or [])]
                 if w2:
                     out_words = w2
@@ -251,6 +256,20 @@ def smooth(a, k):
     return np.convolve(a, np.ones(k) / k, mode="same")
 
 
+_T0 = [__import__('time').time()]
+
+
+def _t(label):
+    """Where the time goes: one line per stage in stage_times.log (next to the dashboard)."""
+    import time
+    try:
+        with open(Path(__file__).resolve().parent.parent / 'stage_times.log', 'a', encoding='utf-8') as f:
+            f.write(f'{time.strftime("%H:%M:%S")} {label}: {time.time() - _T0[0]:.0f}s' + chr(10))
+    except OSError:
+        pass
+    _T0[0] = time.time()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src"); ap.add_argument("--top", type=int, default=8)
@@ -260,9 +279,9 @@ def main():
     ap.add_argument("--start", type=int, default=0, help="start N minutes into a long VOD (timestamps in candidates are then relative to the slice)")
     a = ap.parse_args()
     d = job_dir(a.src + (f"#t{a.start}" if a.start else ""))
-    vid, info = fetch(a.src, d, a.max_minutes, a.start)
+    vid, info = fetch(a.src, d, a.max_minutes, a.start); _t(f'{d.name} download')
     dur = float((ffprobe(vid).get("format") or {}).get("duration") or 0)
-    wav, db = audio_rms(vid, d)
+    wav, db = audio_rms(vid, d); _t('audio')
     if dur <= 0:  # some live recordings carry no length in their header (a broken or ad-interrupted recording): measure the audio instead
         try:
             with wave.open(str(wav)) as wf:
@@ -274,7 +293,7 @@ def main():
             print("job: " + str(d) + chr(10) + "this recording has no readable length: skipping it" + chr(10) + "0 candidates (0 strong)")
             return
     n = len(db)
-    words = transcribe(wav, d)
+    words = transcribe(wav, d); _t('speech recognition')
     lang = load_json(d / "lang.json") if (d / "lang.json").exists() else {"language": "en", "p": 1}
     try:
         from textutil import allowed_languages
@@ -309,7 +328,7 @@ def main():
     w_heat = 2.0 if heat.any() else 0
     w_chat = 3.5 if chat.any() else 0          # chat reaction is the primary signal; sound only backs it up
     w_loud = 0.8 if chat.any() else 1.2        # without chat (no replay/live chat) fall back to loudness
-    motion = smooth(PR.cap_z(z(smooth(motion_series(vid, d, n), 5))), 3)
+    _t('speech-derived signals'); motion = smooth(PR.cap_z(z(smooth(motion_series(vid, d, n), 5))), 3); _t('motion')
     # listening: how the voice sounds, laughter, swearing (= real excitement), something unusual being said, speech speeding up
     try:
         voice = voice_series(wav, n)

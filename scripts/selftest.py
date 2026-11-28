@@ -1575,7 +1575,7 @@ def test_a_run_stops_when_the_speech_recognition_cannot_run_here():
         autorun.note_block = lambda t: False
         autorun.ASR_FAILS = 0
         v = {"id": "x", "duration": 95 * 60, "title": "t", "channel": "c", "views": 1}
-        assert autorun.strong_candidates(v) == [] and len(calls) == 1 and autorun.ASR_FAILS == 1, (calls, autorun.ASR_FAILS)   # one try, not one per slice
+        assert autorun.strong_candidates(v) == [] and len(calls) <= 3 and autorun.ASR_FAILS == 1, (calls, autorun.ASR_FAILS)   # the parts start together, but the failure counts once (and stops the video), not once per slice
     finally:
         autorun.sh, autorun.log, autorun.note_block, autorun.ASR_FAILS = saved
 

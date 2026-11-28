@@ -94,7 +94,7 @@ def load_whisper(device, size="small"):
     last = None
     for ct in whisper_types(device):
         try:
-            return WhisperModel(size, device=device, compute_type=ct)
+            return WhisperModel(size, device=device, compute_type=ct, **({"cpu_threads": int(os.environ.get("CLIPPY_ASR_THREADS") or 0) or os.cpu_count() or 4} if device == "cpu" else {}))  # all cores (the default uses only 4), or this process' share when several parts run at once
         except (RuntimeError, ValueError) as e:
             last = e
             print(f"Whisper on {device} with {ct} is not available here ({str(e)[:80]})", file=sys.stderr)

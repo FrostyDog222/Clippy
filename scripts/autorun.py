@@ -239,12 +239,23 @@ def strong_candidates(v):
     if CUSTOM and CUSTOM.get("start") is not None:  # the user named the part to look at (minutes into the video, and how many minutes)
         plans = [["--start", str(CUSTOM["start"]), "--max-minutes", str(CUSTOM.get("len") or 12)]]
     found = []
-    for k_, extra in enumerate(plans):
-        if len(plans) > 1:  # a long video is analysed in parts of about 10 minutes (each takes a while): say which one, so the dashboard never looks stalled
-            progress(LAST_PCT, f"Analysing: {v.get('channel', '')} - {v.get('title', '')[:45]} (part {k_ + 1} of {len(plans)}: speech recognition, this takes a while)")
+    if len(plans) > 1:  # the parts of one long video are independent: analyse them at the same time (each gets its share of the CPU; downloads, speech recognition and AI scoring overlap)
+        progress(LAST_PCT, f"Analysing: {v.get('channel', '')} - {v.get('title', '')[:45]} ({len(plans)} parts at the same time: speech recognition, this takes a while)")
+    tmo = 1500 if common.whisper_size() == "small" else 4800  # the bigger speech model needs about as long as the audio itself
+    _os.environ["CLIPPY_ASR_THREADS"] = str(max(2, (_os.cpu_count() or 4) // len(plans)))
+    def _one(extra):
         try:
-            r = sh([PY, "scripts/moments.py", url, "--top", "6", "--min", str(LIMITS[0]), "--max", str(LIMITS[1]), *extra], timeout=(1500 if common.whisper_size() == "small" else 4800))  # the bigger speech model needs about as long as the audio itself
+            return sh([PY, "scripts/moments.py", url, "--top", "6", "--min", str(LIMITS[0]), "--max", str(LIMITS[1]), *extra], timeout=tmo)
         except subprocess.TimeoutExpired:
+            return None
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(plans)) as ex:
+            results = list(ex.map(_one, plans))
+    finally:
+        _os.environ.pop("CLIPPY_ASR_THREADS", None)
+    for k_, (extra, r) in enumerate(zip(plans, results)):
+        if r is None:
             log("  analysis took too long on this PC: skipping this video for now (it is not marked as bad)"); v["_dl_failed"] = True; break
         m = re.search(r"job: (.+)", r.stdout)
         if not m:
@@ -813,6 +824,7 @@ GOOD_RANK, MAX_COMPARE = 8.0, 3
 
 
 DONE_VIDS = set()  # sources that already gave a clip in this run (never used twice)
+T0 = time.time()  # when this run started
 WANT, MADE = 1, 0  # clips wanted in this run / clips made so far (the dashboard's "clips this run"; fewer is fine when Clippy cannot find enough good ones)
 
 
@@ -899,8 +911,8 @@ def try_videos(vids, st, sf, dry, base_pct, creator=None):
                 code = cut_pending(dry)
                 if code is not None:
                     return code
-            elif WANT > 1 and strong_pending() >= WANT - MADE:  # enough clearly good moments for all the clips wanted: cut now instead of analysing more long videos (each takes a long time)
-                log(f"  {strong_pending()} strong moments are enough for the {WANT - MADE} clip(s) still wanted: cutting now, no more videos")
+            elif WANT > 1 and (strong_pending() >= WANT - MADE or (strong_pending() >= 1 and time.time() - T0 > 1500)):  # enough clearly good moments for all the clips wanted (or this run is already 25 min old and has some): cut now instead of analysing more long videos (each takes a long time)
+                log(f"  {strong_pending()} strong moments are enough for the {WANT - MADE} clip(s) still wanted (or the run has taken long): cutting now, no more videos")
                 code = flush(dry)
                 if code is not None:
                     return code

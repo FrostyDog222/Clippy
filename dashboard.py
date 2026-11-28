@@ -1399,7 +1399,7 @@ _CLEAN = {"t": 0.0}
 
 def clean_tick():
     """Every 30 minutes while the dashboard runs: free the disk (source videos, old clips, job folders nobody needs). Skipped while an upload runs; cleanup.py itself never touches a job that was used recently."""
-    if time.time() - _CLEAN["t"] < 1800 or lock_busy():
+    if time.time() - _CLEAN["t"] < 1800 or lock_busy() or running():  # (never while a run is going: it keeps downloaded videos of moments it has not cut yet)
         return
     _CLEAN["t"] = time.time()
     cleanup.run()
