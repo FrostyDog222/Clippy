@@ -42,7 +42,13 @@ def log(msg):
     print(time.strftime("%H:%M:%S  ") + str(msg), flush=True)  # every log line starts with the time
 
 
+LAST_PCT = 10
+
+
 def progress(pct, msg):
+    global LAST_PCT
+    if pct > 0:
+        LAST_PCT = pct
     subprocess.run([PY, str(R / "scripts" / "progress.py"), str(pct), msg])
 
 
@@ -233,11 +239,13 @@ def strong_candidates(v):
     if CUSTOM and CUSTOM.get("start") is not None:  # the user named the part to look at (minutes into the video, and how many minutes)
         plans = [["--start", str(CUSTOM["start"]), "--max-minutes", str(CUSTOM.get("len") or 12)]]
     found = []
-    for extra in plans:
+    for k_, extra in enumerate(plans):
+        if len(plans) > 1:  # a long video is analysed in parts of about 10 minutes (each takes a while): say which one, so the dashboard never looks stalled
+            progress(LAST_PCT, f"Analysing: {v.get('channel', '')} - {v.get('title', '')[:45]} (part {k_ + 1} of {len(plans)}: speech recognition, this takes a while)")
         try:
-            r = sh([PY, "scripts/moments.py", url, "--top", "6", "--min", str(LIMITS[0]), "--max", str(LIMITS[1]), *extra], timeout=1500)
+            r = sh([PY, "scripts/moments.py", url, "--top", "6", "--min", str(LIMITS[0]), "--max", str(LIMITS[1]), *extra], timeout=(1500 if common.whisper_size() == "small" else 4800))  # the bigger speech model needs about as long as the audio itself
         except subprocess.TimeoutExpired:
-            log("  analysis took longer than 25 min: giving up on this video"); break
+            log("  analysis took too long on this PC: skipping this video for now (it is not marked as bad)"); v["_dl_failed"] = True; break
         m = re.search(r"job: (.+)", r.stdout)
         if not m:
             err = (r.stderr or r.stdout)[-300:]
@@ -812,6 +820,11 @@ def enough():
     return MADE >= WANT
 
 
+def strong_pending():
+    """How many clearly good moments (rank above the bar) are waiting to be cut, over all the videos looked at so far."""
+    return sum(1 for _v, _c, jl in PENDING for j in jl if j[0] >= GOOD_RANK)
+
+
 def cut_pending(dry, n=None):
     """Cut the best-ranked moments over all videos judged so far: one per video first (variety), then more from the same videos if still needed; the next-best when a cut fails.
     n = how many (default: what the run still needs). Returns an exit code when at least one was cut, else None."""
@@ -884,6 +897,11 @@ def try_videos(vids, st, sf, dry, base_pct, creator=None):
             log(f"  best moment of this video: rank {best:.1f}" + ("" if best >= GOOD_RANK else f" (below {GOOD_RANK:g}: also looking at other videos)"))
             if WANT == 1 and (best >= GOOD_RANK or len(PENDING) >= MAX_COMPARE):  # (with several clips wanted, everything good is collected and the best ones are cut at the end of each source)
                 code = cut_pending(dry)
+                if code is not None:
+                    return code
+            elif WANT > 1 and strong_pending() >= WANT - MADE:  # enough clearly good moments for all the clips wanted: cut now instead of analysing more long videos (each takes a long time)
+                log(f"  {strong_pending()} strong moments are enough for the {WANT - MADE} clip(s) still wanted: cutting now, no more videos")
+                code = flush(dry)
                 if code is not None:
                     return code
             continue

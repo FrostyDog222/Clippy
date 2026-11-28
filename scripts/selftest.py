@@ -1773,6 +1773,19 @@ def test_the_speech_model_status_is_green_yellow_or_red():
     assert bad["whisper"]["level"] == "bad" and bad["whisper"]["fix"]["action"] == "install:whisper_redo"
 
 
+def test_a_multi_clip_run_stops_analysing_once_there_are_enough_strong_moments():
+    saved = autorun.PENDING[:], autorun.GOOD_RANK, autorun.MADE
+    try:
+        autorun.PENDING.clear(); autorun.MADE = 0
+        autorun.PENDING.append(({"id": "a"}, "c", [(9.7, 0, "j", 1, {}), (7.0, 0, "j", 2, {})]))
+        autorun.PENDING.append(({"id": "b"}, "c", [(7.3, 0, "j", 1, {})]))
+        assert autorun.strong_pending() == 1                       # 9.7 only: 7.0 and 7.3 are below the bar of 8
+        autorun.PENDING.append(({"id": "c"}, "c", [(10.9, 0, "j", 1, {}), (9.3, 0, "j", 2, {})]))
+        assert autorun.strong_pending() == 3                       # three strong moments: enough for 3 clips
+    finally:
+        autorun.PENDING[:] = saved[0]; autorun.GOOD_RANK, autorun.MADE = saved[1], saved[2]
+
+
 if __name__ == "__main__":
     fails = 0
     before = _snapshot()

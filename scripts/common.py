@@ -52,6 +52,17 @@ def whisper_cached(size):
     return whisper_status(size)[0] == "ok"
 
 
+def allowed_langs(cfg=None):
+    """The languages picked in Settings as a list of codes (None = any language)."""
+    try:
+        if cfg is None:
+            cfg = json.loads((Path(os.environ.get("CLIP_DESK_HOME", Path.cwd())) / "autopost_config.json").read_text(encoding="utf-8-sig"))
+        v = cfg.get("languages", ["en"])
+        return None if v in ("any", None, [], "") else ([v] if isinstance(v, str) else [str(x) for x in v])
+    except Exception:
+        return ["en"]
+
+
 def whisper_size(cfg=None):
     """"medium" for any language other than English when that model is on the PC (small speech models are poor at Romanian and the like), else "small"."""
     try:

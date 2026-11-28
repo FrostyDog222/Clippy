@@ -10,7 +10,7 @@ import argparse, json, math, re, subprocess, sys, wave
 from pathlib import Path
 import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
-from common import ffprobe, is_url, job_dir, load_json, load_whisper, run, save_json, tool, whisper_size, ytdlp_base, ytdlp_json
+from common import allowed_langs, ffprobe, is_url, job_dir, load_json, load_whisper, run, save_json, tool, whisper_size, ytdlp_base, ytdlp_json
 
 TALK = re.compile(r"\b(chat|y\s?'?all|subs?|subscribe|donations?|gifted|should i|my channel)\b", re.I)
 # words that show the streamer is really in the game around this moment (a 700-minute stream is mostly talking / other games)
@@ -149,7 +149,9 @@ def transcribe(wav, d):
         segs, tinfo = model.transcribe(pcm, word_timestamps=True, vad_filter=True)
         save_json(d / "lang.json", {"language": tinfo.language, "p": round(float(tinfo.language_probability), 2)})  # English-only pipeline: see main()
         out_words = [{"w": w.word.strip(), "s": round(w.start, 2), "e": round(w.end, 2)} for s in segs for w in (s.words or [])]
-        if tinfo.language != "en" or float(tinfo.language_probability) < 0.8:  # not clearly English: streamers switch languages mid-speech, so detect the language window by window
+        al = allowed_langs()
+        clear = float(tinfo.language_probability) >= 0.9 and al and tinfo.language in al and tinfo.language != "en"  # clearly the language you picked: the second pass would take as long again and gave fewer words
+        if (tinfo.language != "en" or float(tinfo.language_probability) < 0.8) and not clear:  # not clearly English or your language: streamers switch languages mid-speech, so detect the language window by window
             try:
                 segs2, _ = model.transcribe(pcm, word_timestamps=True, vad_filter=True, multilingual=True)
                 w2 = [{"w": w.word.strip(), "s": round(w.start, 2), "e": round(w.end, 2)} for s in segs2 for w in (s.words or [])]
