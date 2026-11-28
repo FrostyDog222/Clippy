@@ -2004,15 +2004,19 @@ def health_info():
                 free = _sh.disk_usage(str(R)).free / 1e9
             except OSError:
                 free = None
-            wl = None
+            wl, wok = None, None
             try:
                 langs = c.get("languages", ["en"])
                 langs = [langs] if isinstance(langs, str) else list(langs or [])
                 if langs != ["en"] and not common.whisper_cached("medium"):  # any language other than English (an empty list = any language)
                     wl = textutil.LANGS.get(next((x for x in langs if x != "en"), ""), "other languages")
+                elif langs != ["en"]:
+                    wok = "Speech recognition: medium model installed (more accurate for " + (textutil.LANGS.get(next((x for x in langs if x != "en"), ""), "other languages")) + ")"
+                else:
+                    wok = "Speech recognition: small model (English)"
             except Exception:
                 wl = None
-            items = health.checks(c, signin_state(), update_info(), free, len(waiting_clips()), have, yt_limit_text(), yt_block_min=yt_block_minutes(), whisper_lang=wl)
+            items = health.checks(c, signin_state(), update_info(), free, len(waiting_clips()), have, yt_limit_text(), yt_block_min=yt_block_minutes(), whisper_lang=wl, whisper_ok=wok)
             for it in items:  # a repair started from here: show it on its own line
                 if FIX["what"] and it["id"] == FIXES[FIX["what"]][2]:
                     if FIX["state"] == "running":

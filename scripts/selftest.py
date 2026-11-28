@@ -1736,6 +1736,8 @@ def test_romanian_support_pieces():
     it = {x["id"]: x for x in health.checks({}, {}, None, 50, 0, have, whisper_lang="Romanian")}
     assert it["whisper"]["fix"]["action"] == "install:whisper" and "Romanian" in it["whisper"]["label"]
     assert "whisper" not in {x["id"] for x in health.checks({}, {}, None, 50, 0, have)}
+    ok = {x["id"]: x for x in health.checks({}, {}, None, 50, 0, have, whisper_ok="Speech recognition: medium model installed (more accurate for Romanian)")}
+    assert ok["whisper"]["level"] == "ok" and "medium" in ok["whisper"]["label"]                  # installed: a green line
     # titles are asked for in the channel's language
     ai_title.LANG_NAME = "Romanian"
     try:
