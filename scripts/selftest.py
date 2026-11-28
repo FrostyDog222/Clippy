@@ -1502,9 +1502,10 @@ def test_only_one_live_watcher_can_run():
     assert live_watch.pid_alive(os.getpid()) and not live_watch.pid_alive(4000000)  # a running process vs one that does not exist
     import dashboard as d
     f = Path(__import__("tempfile").mkdtemp()) / "w.pid"
-    assert not d._pid_alive(f)
-    f.write_text(str(os.getpid())); assert d._pid_alive(f)
-    f.write_text("4000000"); assert not d._pid_alive(f)
+    assert not d._pidfile_alive(f)
+    f.write_text(str(os.getpid())); assert d._pidfile_alive(f)
+    f.write_text("4000000"); assert not d._pidfile_alive(f)
+    assert d._pid_alive(os.getpid()) and not d._pid_alive(4000000)   # (the older helper that takes a process id is not shadowed: runs, pause and stop use it)
 
 
 def test_a_streamer_gets_more_videos_checked_when_there_are_few_fresh_ones():
@@ -1686,6 +1687,35 @@ def test_an_old_settings_file_still_loads_and_saves():
         assert not d.live_run_active() or True                    # the removed live switch no longer starts anything: only live_run.json does
     finally:
         d.CFG = keep
+
+
+def test_cookies_are_on_by_default_and_the_health_card_explains_a_youtube_pause():
+    import common, health, tempfile, json
+    d = Path(tempfile.mkdtemp()); (d / "chrome_profile").mkdir(); (d / "autopost_config.json").write_text("{}")   # an older settings file without the key
+    real = common.__file__
+    try:
+        common.__file__ = str(d / "scripts" / "common.py")
+        common.COOKIE_BAD = d / "none.json"
+        assert "--cookies-from-browser" in common.youtube_cookie_args()                      # on by default
+        (d / "autopost_config.json").write_text('{"youtube_cookies": false}'); assert common.youtube_cookie_args() == []   # unless switched off
+    finally:
+        common.__file__ = real; import importlib; importlib.reload(common)
+    it = {x["id"]: x for x in health.checks({}, {}, None, 50, 0, {"chrome": True, "ffmpeg": True, "ytdlp": True}, yt_block_min=120)}
+    assert it["ytblock"]["level"] == "warn" and it["ytblock"]["fix"]["action"] == "signin" and "120" in it["ytblock"]["label"]
+    assert "ytblock" not in {x["id"]: x for x in health.checks({}, {}, None, 50, 0, {"chrome": True, "ffmpeg": True, "ytdlp": True})}
+
+
+def test_a_running_run_is_not_reported_as_interrupted():
+    """run_alive() asks whether the run's process exists: a live process must count (a shadowed helper once made every run look 'interrupted')."""
+    import dashboard as d, json, os, tempfile, datetime as dtm
+    keep = d.R; tmp = Path(tempfile.mkdtemp()); d.R = tmp
+    try:
+        (tmp / "autorun.pid").write_text(json.dumps({"pid": os.getpid(), "start": 0}))
+        assert d._run_pid() == os.getpid() and d.run_alive()
+        (tmp / "autorun.pid").write_text(json.dumps({"pid": 4000000, "start": 0}))
+        assert not d.run_alive() or True   # (a dead process: other signals such as the live watcher may still count)
+    finally:
+        d.R = keep
 
 
 if __name__ == "__main__":

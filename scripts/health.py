@@ -2,7 +2,7 @@
 checks(...) -> [{"id", "level": ok|info|warn|bad, "label", "detail", "fix": None | {"label", "action"}}]   action: signin | update | cleanup | install:<ffmpeg|ytdlp|browser|deno> | settings:<element id> | none"""
 
 
-def checks(cfg, signin, update, free_gb, waiting, have, yt_limit_until=None, max_waiting=8):
+def checks(cfg, signin, update, free_gb, waiting, have, yt_limit_until=None, max_waiting=8, yt_block_min=None):
     out = []
 
     def add(i, level, label, detail="", fix=None):
@@ -42,6 +42,10 @@ def checks(cfg, signin, update, free_gb, waiting, have, yt_limit_until=None, max
         add("waiting", "info", f"{waiting} clips are waiting for you", "Autopilot stops preparing new clips while this many wait. Look at them: rate each one (👍, 😐 or 👎), then post, schedule or remove it.")
     if update and update.get("available"):
         add("update", "info", "A new version of Clippy is available", "", {"label": "Update now", "action": "update"})
+    if yt_block_min:
+        add("ytblock", "warn", f"YouTube is asking to confirm you are not a bot (downloads paused for about {yt_block_min} more min)",
+            "Sign in to YouTube in Clippy so it can use your login (Accounts). If it keeps happening, your internet connection may be flagged: try another network (for example your phone's hotspot), or wait a few hours. Run now tries again anyway. Twitch clips keep working.",
+            {"label": "Sign in to YouTube", "action": "signin"})
     if yt_limit_until:
         add("ytlimit", "warn", "YouTube's daily upload limit was reached", f"Clips go to TikTok only until about {yt_limit_until}; then YouTube resumes by itself.")
     return out

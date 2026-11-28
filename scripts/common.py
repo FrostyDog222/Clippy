@@ -143,7 +143,7 @@ def youtube_cookie_args():
             pass
         if (here / "post.lock").exists() and not lock_is_stale(here / "post.lock"):  # an upload is using that Chrome profile right now: its cookie file is locked and cannot be copied (the run would fail), so go without cookies this once
             return []
-        if cfg.get("youtube_cookies") and prof.exists():
+        if cfg.get("youtube_cookies", True) and prof.exists():  # on unless switched off (an older settings file simply has no such key)
             return ["--cookies-from-browser", f"{find_browser()[2] or 'chrome'}:{prof}"]
     except Exception:
         pass

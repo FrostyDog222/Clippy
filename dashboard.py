@@ -237,10 +237,10 @@ def stop_runs():
     except (OSError, ValueError):
         pass
     for _ in range(10):
-        if not _pid_alive(R / "live_watch.pid"):
+        if not _pidfile_alive(R / "live_watch.pid"):
             break
         time.sleep(0.3)
-    still = _pid_alive(R / "live_watch.pid")
+    still = _pidfile_alive(R / "live_watch.pid")
     for f in (R / "autorun.pid", R / "post.lock", SUSP):
         f.unlink(missing_ok=True)
     for s in REVIEW_STATUS.values():
@@ -615,7 +615,7 @@ def live_status():
         return None
 
 
-def _pid_alive(f):
+def _pidfile_alive(f):
     """Is the process whose id is in this file still running? (the live watcher writes live_watch.pid)"""
     try:
         import ctypes
@@ -639,7 +639,7 @@ def live_run_active():
 
 def spawn_live():
     """Launch the live watcher process (only one can run: it refuses to start when another is alive)."""
-    if live_status() is not None or _pid_alive(R / "live_watch.pid"):
+    if live_status() is not None or _pidfile_alive(R / "live_watch.pid"):
         return
     _live["p"] = subprocess.Popen([BGPY, "scripts/live_watch.py"], cwd=R, creationflags=NOWIN,
                                   stdout=open(R / "live_watch.log", "a", encoding="utf-8"), stderr=subprocess.STDOUT)
@@ -1596,6 +1596,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.send(409, "A live run is going. Press Stop now first.", "text/plain")
             if blocked_msg(read_cfg()):
                 return self.send(409, blocked_msg(read_cfg()), "text/plain")
+            if running():  # two runs at once would work on the same videos and files
+                return self.send(409, "A run is already going. Wait until it has finished, or press Stop now first.", "text/plain")
             run_now(True, int(read_cfg().get("clips_per_run", 1) or 1), manual=True)  # the manual button: run now even outside the schedule, with the "clips this run" number
         elif self.path in ("/api/signin", "/api/signcheck"):
             err = start_signin() if self.path == "/api/signin" else start_check()
@@ -1998,7 +2000,7 @@ def health_info():
                 free = _sh.disk_usage(str(R)).free / 1e9
             except OSError:
                 free = None
-            items = health.checks(c, signin_state(), update_info(), free, len(waiting_clips()), have, yt_limit_text())
+            items = health.checks(c, signin_state(), update_info(), free, len(waiting_clips()), have, yt_limit_text(), yt_block_min=yt_block_minutes())
             for it in items:  # a repair started from here: show it on its own line
                 if FIX["what"] and it["id"] == FIXES[FIX["what"]][2]:
                     if FIX["state"] == "running":
@@ -2073,6 +2075,14 @@ def diagnostics_text():
         except OSError:
             pass
     return chr(10).join(out)
+
+
+def yt_block_minutes():
+    """Minutes left on the pause after YouTube asked to confirm 'not a bot' (0 = no pause)."""
+    try:
+        return max(0, int(json.loads((R / "yt_block.json").read_text(encoding="utf-8"))["until"] - time.time()) // 60)
+    except Exception:
+        return 0
 
 
 def yt_limit_text():
@@ -2167,7 +2177,7 @@ if __name__ == "__main__":
         secretstore.migrate_all()  # any old plain-text key becomes an encrypted file
     except Exception:
         pass
-    if live_status() is None and not _pid_alive(R / "live_watch.pid"):
+    if live_status() is None and not _pidfile_alive(R / "live_watch.pid"):
         LIVE_RUN.unlink(missing_ok=True)  # a live run whose watcher is gone is over: a restart never starts watching by itself
     if not os.environ.get("CLIPPY_NOBG"):  # (tests start the server without the background loops)
         threading.Thread(target=ytdlp_loop, daemon=True).start()
