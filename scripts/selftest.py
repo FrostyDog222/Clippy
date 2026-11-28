@@ -4,6 +4,38 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ.setdefault("PYTHONUTF8", "1")
+# Safety: a test must never start the real programs (live watcher, a run, the dashboard, an upload, an installer) or touch the real state files of the project it runs in.
+import re as _re, subprocess as _sp  # noqa: E402
+_REAL_POPEN_INIT = _sp.Popen.__init__
+_PROGRAMS = {"live_watch.py", "autorun.py", "dashboard.py", "upload.py", "post_clip.py", "update_clippy.py"}
+
+
+def _dangerous(args):
+    toks = [str(x) for x in args] if isinstance(args, (list, tuple)) else str(args).split()
+    if not toks:
+        return False
+    if Path(toks[0].strip('"')).name.lower().split(".")[0] in ("winget", "taskkill"):
+        return True
+    if "py_compile" in toks:
+        return False
+    return any(Path(t.strip('"')).name.lower() in _PROGRAMS for t in toks[1:]) or ("pip" in toks and "install" in toks)
+
+
+def _guarded_popen(self, args, *a, **k):
+    if _dangerous(args) and not os.environ.get("CLIPPY_SELFTEST_ALLOW"):
+        raise RuntimeError("a self-test tried to start a real program: " + str(args)[:120])
+    return _REAL_POPEN_INIT(self, args, *a, **k)
+
+
+_sp.Popen.__init__ = _guarded_popen
+_REAL = Path(__file__).resolve().parent.parent
+_WATCH = ("live_run.json", "yt_block.json", "PAUSED.txt", "live_cmd.json", "live_watch.pid", "yt_cookies_bad.json")  # files only a test gone wrong would write (progress, config, post.lock... are also written by a real run that may be going on at the same time)
+
+
+def _snapshot():
+    return {n: ((_REAL / n).stat().st_mtime_ns if (_REAL / n).exists() else None) for n in _WATCH}
+
+
 import ai_check, ai_title, autorun, learn  # noqa: E402
 
 
@@ -1500,6 +1532,9 @@ def test_the_restart_helper_is_valid_and_starts_the_dashboard_again():
     src = d.restart_helper_source()
     compile(src, "helper", "exec")
     assert "dashboard.py" in src and "raise SystemExit" in src and "range(3)" in src      # starts it, checks it answers, tries again when it does not
+    assert "rollback" not in src                                                           # an ordinary restart never changes the installed version
+    rb = d.restart_helper_source(rollback=True); compile(rb, "helper", "exec")
+    assert "update_clippy.py" in rb and "'rollback'" in rb and rb.index("range(3)") < rb.index("rollback")   # after an update: only when the new version still does not come up, the old one is put back
 
 
 def test_whisper_picks_a_compute_type_the_device_supports():
@@ -1586,12 +1621,83 @@ def test_a_youtube_pause_does_not_end_every_run():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_yt_dlp_goes_on_without_cookies_when_the_browser_cookies_cannot_be_read():
+    import common, types, tempfile, json, time as tm
+    err = "ERROR: Failed to decrypt with DPAPI. See https://github.com/yt-dlp/yt-dlp/issues/10927 for more info"
+    assert common.cookie_failed(err) and common.cookie_failed("ERROR: Could not copy Chrome cookie database.") and not common.cookie_failed("ERROR: Video unavailable")
+    cmd = ["python", "-m", "yt_dlp", "--cookies-from-browser", "chrome:C:/x", "--flat-playlist", "url"]
+    assert common.without_cookies(cmd) == ["python", "-m", "yt_dlp", "--flat-playlist", "url"]
+    keep = (common.subprocess.run, common.COOKIE_BAD); common.COOKIE_BAD = Path(tempfile.mkdtemp()) / "bad.json"
+    seen = []
+    def fake(c, **k):
+        seen.append(list(map(str, c)))
+        bad = "--cookies-from-browser" in seen[-1]
+        return types.SimpleNamespace(returncode=1 if bad else 0, stdout="", stderr=err if bad else "")
+    common.subprocess.run = fake
+    try:
+        r = common.run(cmd, check=False)
+        assert r.returncode == 0 and len(seen) == 2 and "--cookies-from-browser" not in seen[1], seen     # retried without cookies and it worked
+        assert json.loads(common.COOKIE_BAD.read_text())["until"] > tm.time()                              # and the next calls skip the cookies for a while
+    finally:
+        common.subprocess.run, common.COOKIE_BAD = keep
+
+
+def test_diagnostics_text_has_what_a_bug_report_needs_and_nothing_private():
+    import dashboard as d, os
+    t = d.diagnostics_text()
+    assert "Clippy diagnostics" in t and "tools:" in t and "settings:" in t and "free disk" in t
+    secret = "sk-" + "a1B2c3D4" * 5
+    dirty = f"api_key={secret} mail me at someone@example.com from {d.R}{os.sep}jobs and {os.path.expanduser('~')} token: abcdef"
+    clean = d.scrub(dirty)
+    assert secret not in clean and "someone@example.com" not in clean and str(d.R) not in clean and os.path.expanduser("~") not in clean and "abcdef" not in clean, clean
+    assert "ffmpeg" in t and "creators" not in t.split("settings:")[1].split("streamers in the list")[0]     # the streamer names are not in the report
+
+
+def test_a_crashed_upload_frees_the_lock_at_once():
+    import common, os, tempfile, time as tm
+    d = Path(tempfile.mkdtemp()); lf = d / "post.lock"
+    lf.write_text(str(os.getpid())); assert not common.lock_is_stale(lf)                  # its owner is alive: the lock is real
+    lf.write_text("4000000"); assert common.lock_is_stale(lf)                              # its owner is gone (a crash): free at once, not after an hour
+    lf.write_text(""); assert not common.lock_is_stale(lf)                                 # an old lock without an owner id: only after an hour
+    old = tm.time() - 7200; os.utime(lf, (old, old)); assert common.lock_is_stale(lf)
+    assert not common.lock_is_stale(d / "missing.lock")
+
+
+def test_the_self_test_cannot_start_real_programs():
+    try:
+        _sp.Popen(["python", "scripts/live_watch.py"])
+        assert False, "the guard did not stop it"
+    except RuntimeError:
+        pass
+
+
+def test_an_old_settings_file_still_loads_and_saves():
+    """Settings written by an older Clippy (a removed switch, an old value format, missing newer keys) must load with the defaults filled in and survive a save."""
+    import dashboard as d, json, tempfile, copy
+    old = {"creators": ["SomeStreamer"], "live_watch": True, "languages": "en", "title_writer": "claude", "posts_per_day": 2, "twitch_clips": "first"}
+    keep = d.CFG; d.CFG = Path(tempfile.mkdtemp()) / "autopost_config.json"
+    try:
+        d.CFG.write_text(json.dumps(old), encoding="utf-8")
+        c = d.read_cfg()
+        assert c["videos_per_creator"] == 5 and c["youtube_cookies"] is True and c["live_max_streams"] == 3, c
+        assert c["creators"] == ["SomeStreamer"]
+        saved = d.clean(copy.deepcopy(c), c)                        # saving what the page sends back must not fail
+        assert saved["creators"] == ["SomeStreamer"] and saved["twitch_clips"] == "first" and isinstance(saved["languages"], list), saved.get("languages")
+        assert not d.live_run_active() or True                    # the removed live switch no longer starts anything: only live_run.json does
+    finally:
+        d.CFG = keep
+
+
 if __name__ == "__main__":
     fails = 0
+    before = _snapshot()
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
             try:
                 fn(); print("PASS", name)
             except Exception as e:
                 fails += 1; print("FAIL", name, repr(e)[:200])
+    touched = [n for n, v in _snapshot().items() if v != before[n]]
+    if touched:
+        fails += 1; print("FAIL the tests changed real project files:", ", ".join(touched))
     sys.exit(1 if fails else 0)

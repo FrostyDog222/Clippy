@@ -1,5 +1,5 @@
 """Shared helpers: paths, tool lookup, yt-dlp and ffmpeg wrappers."""
-import hashlib, json, os, re, shutil, subprocess, sys
+import hashlib, json, os, re, shutil, subprocess, sys, time
 from pathlib import Path
 
 ROOT = Path(os.environ.get("CLIP_DESK_HOME", Path.cwd()))
@@ -48,6 +48,35 @@ def load_whisper(device, size="small"):
     raise last or RuntimeError("no compute type works")
 
 
+def pid_alive(pid):
+    """Is a process with this id still running? (Windows; True when it cannot be told)"""
+    try:
+        import ctypes
+        h = ctypes.windll.kernel32.OpenProcess(0x100000, False, int(pid))  # SYNCHRONIZE
+        if not h:
+            return False
+        try:
+            return ctypes.windll.kernel32.WaitForSingleObject(h, 0) == 0x102
+        finally:
+            ctypes.windll.kernel32.CloseHandle(h)
+    except Exception:
+        return True
+
+
+def lock_is_stale(lf, max_age=3600):
+    """A post.lock whose owner is gone (crash, power loss): the lock holds its owner's process id, so it is stale as soon as that process does not exist. An old lock without an id
+    (written by an older version) is stale after an hour."""
+    try:
+        age = time.time() - Path(lf).stat().st_mtime
+    except OSError:
+        return False
+    try:
+        pid = int(Path(lf).read_text().strip() or 0)
+    except (OSError, ValueError):
+        pid = 0
+    return (not pid_alive(pid)) if pid else age > max_age
+
+
 def tool(name):
     p = shutil.which(name)
     if not p:
@@ -56,12 +85,48 @@ def tool(name):
 
 
 def run(cmd, check=True, capture=False):
-    r = subprocess.run(cmd, check=False, text=True, encoding="utf-8", errors="replace",
-                       stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE if capture else None)
+    cook = "--cookies-from-browser" in list(map(str, cmd))  # then stderr is read here, to notice a cookie problem and retry without cookies
+    kw = dict(check=False, text=True, encoding="utf-8", errors="replace", stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE if (capture or cook) else None)
+    r = subprocess.run(cmd, **kw)
+    if cook and r.returncode != 0 and cookie_failed(r.stderr):
+        note_cookie_failure()
+        print("yt-dlp could not read the browser cookies: trying again without them", file=sys.stderr)
+        r = subprocess.run(without_cookies(cmd), **kw)
+    if cook and not capture and r.stderr:
+        sys.stderr.write(r.stderr)  # what the user would have seen anyway
     if check and r.returncode != 0:
         msg = (r.stderr or "")[-1500:] if capture else ""
         sys.exit(f"command failed ({r.returncode}): {' '.join(map(str, cmd))[:200]}\n{msg}")
     return r
+
+
+COOKIE_BAD = Path(__file__).resolve().parent.parent / "yt_cookies_bad.json"  # written when yt-dlp could not read the browser cookies (newer Chrome encrypts them): no cookies for a few hours
+COOKIE_ERR = re.compile(r"cookie database|failed to decrypt|dpapi|could not (find|copy).{0,40}cookie|cookies? (file|jar)|cookies-from-browser|app.?bound", re.I)
+
+
+def cookie_failed(text):
+    """Did yt-dlp fail because it could not read the browser's cookies? (Then the same command works without them.)"""
+    return bool(COOKIE_ERR.search(text or ""))
+
+
+def note_cookie_failure(hours=6):
+    try:
+        COOKIE_BAD.write_text(json.dumps({"until": time.time() + hours * 3600}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def without_cookies(cmd):
+    """The same yt-dlp command minus its --cookies-from-browser <value> pair."""
+    out, skip = [], False
+    for x in map(str, cmd):
+        if skip:
+            skip = False
+        elif x == "--cookies-from-browser":
+            skip = True
+        else:
+            out.append(x)
+    return out
 
 
 def youtube_cookie_args():
@@ -71,7 +136,12 @@ def youtube_cookie_args():
         here = Path(__file__).resolve().parent.parent
         cfg = json.loads((here / "autopost_config.json").read_text(encoding="utf-8"))
         prof = here / "chrome_profile"
-        if (here / "post.lock").exists():  # an upload is using that Chrome profile right now: its cookie file is locked and cannot be copied (the run would fail), so go without cookies this once
+        try:
+            if json.loads(COOKIE_BAD.read_text(encoding="utf-8"))["until"] > time.time():  # the cookies could not be read a moment ago: go without them for now
+                return []
+        except Exception:
+            pass
+        if (here / "post.lock").exists() and not lock_is_stale(here / "post.lock"):  # an upload is using that Chrome profile right now: its cookie file is locked and cannot be copied (the run would fail), so go without cookies this once
             return []
         if cfg.get("youtube_cookies") and prof.exists():
             return ["--cookies-from-browser", f"{find_browser()[2] or 'chrome'}:{prof}"]

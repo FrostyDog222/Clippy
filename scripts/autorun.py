@@ -18,6 +18,7 @@ R = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(R)); sys.path.insert(0, str(R / "scripts"))
 import tick  # noqa: E402
 import pick_rules as PR  # noqa: E402  (polish 1: the small rules of the clip-deciding logic)
+import common  # noqa: E402
 from common import youtube_cookie_args, ytdlp_json  # noqa: E402
 CUSTOM = None  # a run on one link the user chose: {"clips": n, "start": minute or None, "len": minutes or None} (see _custom)
 
@@ -56,6 +57,9 @@ def sh(args, **kw):
         subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"], capture_output=True, creationflags=0x08000000)
         out, err = p.communicate()
         raise subprocess.TimeoutExpired(args, timeout, out, err)
+    if p.returncode != 0 and "--cookies-from-browser" in args and common.cookie_failed(err):  # the browser cookies could not be read (newer Chrome): the same command without them
+        common.note_cookie_failure(); log("  yt-dlp could not read the browser cookies: going on without them")
+        return sh(common.without_cookies(args), timeout=timeout, **kw)
     return subprocess.CompletedProcess(args, p.returncode, out, err)
 
 
@@ -341,9 +345,9 @@ def post_lock(wait=3600):
     lf = R / "post.lock"; end = time.time() + wait
     while True:
         try:
-            os.close(os.open(lf, os.O_CREAT | os.O_EXCL)); break
+            fd = os.open(lf, os.O_CREAT | os.O_EXCL | os.O_WRONLY); os.write(fd, str(os.getpid()).encode()); os.close(fd); break  # the lock names its owner, so a crashed owner frees it at once
         except FileExistsError:
-            if time.time() - lf.stat().st_mtime > 3600:
+            if common.lock_is_stale(lf):
                 lf.unlink(missing_ok=True)
             elif time.time() > end:
                 raise TimeoutError("another upload is still running")

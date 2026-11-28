@@ -7,6 +7,15 @@ os.environ["PYTHONUTF8"] = "1"  # everything the dashboard starts writes UTF-8 (
 sys.path.insert(0, str(R)); sys.path.insert(0, str(R / "scripts"))
 import tick  # noqa: E402
 import cleanup  # noqa: E402
+import common  # noqa: E402
+
+
+def lock_busy():
+    """An upload (or the stats job) is using the signed-in browser profile right now: post.lock exists and its owner is still alive."""
+    lf = R / "post.lock"
+    return lf.exists() and not common.lock_is_stale(lf)
+
+
 import textutil  # noqa: E402
 import ai_title  # noqa: E402
 import secretstore  # noqa: E402
@@ -33,6 +42,9 @@ def read_cfg():
                 secretstore.save("key_p1", secretstore.load("title_api_key"))
     c.setdefault("live_watch", False); c.setdefault("live_max_streams", 3); c.setdefault("ai_check", False); c.setdefault("quality", "strict")
     c.setdefault("twitch_clips", "first"); c.setdefault("twitch_period", "week"); c.setdefault("twitch_per_streamer", 6); c.setdefault("videos_per_creator", 5); c.setdefault("youtube_cookies", True); c.setdefault("twitch_priority", False); c.setdefault("ai_examples", False)  # Twitch clips (made by viewers): where to look, how far back, how many per streamer
+    for k_, v_ in (("window_start", "09:00"), ("window_end", "22:30"), ("creator_mode", "rotate"), ("creators", []), ("posts_per_day", 3), ("min_gap_minutes", 120), ("max_per_creator_per_day", 1),
+                   ("start_date", dt.date.today().isoformat()), ("use_trending_fallback", True)):  # the basics an old or hand-made settings file may lack
+        c.setdefault(k_, v_)
     return c
 
 
@@ -98,7 +110,7 @@ def run_alive():
             return True
     except Exception:
         pass
-    return (R / "post.lock").exists() or any((s or {}).get("state") == "posting" for s in REVIEW_STATUS.values()) or live_status() is not None  # the live watcher counts as running too
+    return lock_busy() or any((s or {}).get("state") == "posting" for s in REVIEW_STATUS.values()) or live_status() is not None  # the live watcher counts as running too
 
 
 def run_stale():
@@ -172,7 +184,7 @@ def pause_run():
         return "Paused: no run is going right now, so nothing is frozen; new runs will not start until you press Resume."
     if not _pid_alive(root):
         return "Paused (no run was active)."
-    if (R / "post.lock").exists():
+    if lock_busy():
         PAUSE.unlink(missing_ok=True)
         raise RuntimeError("An upload is running right now: freezing it halfway could break it. Wait until it finishes, or use Stop now.")
     pids = _tree(root)
@@ -220,13 +232,22 @@ def stop_runs():
           "'AUTOPOST\\.md|run_slot\\.bat|serve_file\\.py|%s.*(autorun|cut|moments|check|live_watch|live|post_clip|upload|stats)\\.py' } | "
           "ForEach-Object { taskkill /PID $_.ProcessId /T /F | Out-Null }" % (os.getpid(), re.escape(str(R)).replace("'", "''")))
     subprocess.run(["powershell", "-NoProfile", "-Command", ps], creationflags=NOWIN)
+    try:  # the live watcher by its own process id (the name search can miss it), and then CHECK that it is really gone
+        subprocess.run(["taskkill", "/PID", str(int((R / "live_watch.pid").read_text())), "/T", "/F"], creationflags=NOWIN, capture_output=True)
+    except (OSError, ValueError):
+        pass
+    for _ in range(10):
+        if not _pid_alive(R / "live_watch.pid"):
+            break
+        time.sleep(0.3)
+    still = _pid_alive(R / "live_watch.pid")
     for f in (R / "autorun.pid", R / "post.lock", SUSP):
         f.unlink(missing_ok=True)
     for s in REVIEW_STATUS.values():
         if (s or {}).get("state") == "posting":
             s.update(state="error", msg="Stopped by you.")
     PAUSE.unlink(missing_ok=True)
-    set_prog(-1, "Stopped by you: the run was ended (it cannot be resumed; press Run now to start a new one)" + (f". Autopilot stays ON and starts its next run in about {HOLD_MIN} minutes." if c.get("autopilot") else ""))
+    set_prog(-1, "Stopped by you: the run was ended (it cannot be resumed; press Run now to start a new one)" + (". The live watcher is still shutting down: press Stop now again if it is still there in a minute" if still else "") + (f". Autopilot stays ON and starts its next run in about {HOLD_MIN} minutes." if c.get("autopilot") else ""))
 
 
 CUSTOM_URL = re.compile(r"^https://((www\.|m\.)?youtube\.com/(watch\?v=|shorts/|live/)[\w-]{6,}|youtu\.be/[\w-]{6,}|(www\.)?twitch\.tv/videos/\d+|clips\.twitch\.tv/[\w-]+|(www\.)?twitch\.tv/\w+/clip/[\w-]+)([&?#/][^\s]*)?$")
@@ -323,9 +344,10 @@ def restart_wanted():
     return code_sig() != START_SIG
 
 
-def restart_helper_source():
+def restart_helper_source(rollback=False):
     """The tiny program that brings the dashboard back after a restart: it waits until the old dashboard has let go of the port, starts a new one and CHECKS that the new one
-    answers; when it does not (it crashed, or something took the port), it starts it again (3 tries), so a restart does not end with nothing running."""
+    answers; when it does not (it crashed, or something took the port), it starts it again (3 tries), so a restart does not end with nothing running.
+    rollback=True (a restart right after an update): when the new version still does not come up, the previous version is put back and started, so an update can never leave the user without Clippy."""
     lines = ["import socket, subprocess, time",
              "def free():",
              "    s = socket.socket()",
@@ -351,13 +373,20 @@ def restart_helper_source():
              "        time.sleep(0.5)",
              "        if up():",
              "            raise SystemExit"]
+    if rollback:
+        lines += [f"subprocess.run([{BGPY!r}, 'scripts/update_clippy.py', 'rollback'], cwd={str(R)!r}, creationflags=0x08000000)",
+                  "for _ in range(60):",
+                  "    if free():",
+                  "        break",
+                  "    time.sleep(0.5)",
+                  f"subprocess.Popen([{BGPY!r}, 'dashboard.py'], cwd={str(R)!r}, creationflags=0x08000000 | 0x00000008, close_fds=True)"]
     return chr(10).join(lines)
 
 
-def restart_self():
+def restart_self(after_update=False):
     """Hard restart: a tiny helper process (no window, survives this one) waits until this dashboard has let go of the port, then starts a fresh dashboard and checks it came up; then this one exits.
     Runs that are already going (their own processes) and the saved settings are not touched."""
-    helper = restart_helper_source()
+    helper = restart_helper_source(rollback=after_update)
     subprocess.Popen([BGPY, "-c", helper], cwd=R, creationflags=NOWIN | DETACHED, close_fds=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.5)
     try:
@@ -396,7 +425,7 @@ def start_signin():
         return NO_BROWSER
     if _busy["what"] or running():
         return "Busy: wait for the current run or check to finish"
-    if (R / "post.lock").exists():
+    if lock_busy():
         return "Busy: an upload is running right now. Try again when it is done."
     def w():
         try:
@@ -829,7 +858,7 @@ def review_expire():
         days = float(read_cfg().get("keep_clips_days", 3))
     except Exception:
         return
-    if not REVIEW.exists() or (R / "post.lock").exists():
+    if not REVIEW.exists() or lock_busy():
         return
     for f in list(REVIEW.glob("*__clip_*.json")):
         if f.name.endswith(".posted.json") or not STEM.match(f.stem):
@@ -868,7 +897,7 @@ def review_remove(stem, auto=False):
         review_unlink(f)  # a locked video is retried now and purged later (review_purge) if it still cannot go
     REVIEW_STATUS.pop(stem, None)
     try:  # the whole job folder of the clip goes too (not while a run or an upload may be using it: the next clean-up sweeps it then)
-        if d and not running() and not (R / "post.lock").exists():
+        if d and not running() and not lock_busy():
             import cleanup
             cleanup.drop_jobs_of(d, skip_stem=stem)
     except Exception:
@@ -1370,7 +1399,7 @@ _CLEAN = {"t": 0.0}
 
 def clean_tick():
     """Every 30 minutes while the dashboard runs: free the disk (source videos, old clips, job folders nobody needs). Skipped while an upload runs; cleanup.py itself never touches a job that was used recently."""
-    if time.time() - _CLEAN["t"] < 1800 or (R / "post.lock").exists():
+    if time.time() - _CLEAN["t"] < 1800 or lock_busy():
         return
     _CLEAN["t"] = time.time()
     cleanup.run()
@@ -1397,9 +1426,9 @@ def review_post(stem, mode="private", only=None, again=False):
         end = time.time() + 1800
         while True:
             try:
-                os.close(os.open(lock, os.O_CREAT | os.O_EXCL)); break
+                fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY); os.write(fd, str(os.getpid()).encode()); os.close(fd); break
             except FileExistsError:
-                if time.time() - lock.stat().st_mtime > 3600:
+                if common.lock_is_stale(lock):
                     lock.unlink(missing_ok=True)
                 elif time.time() > end:
                     raise TimeoutError("another upload is still running")
@@ -1615,6 +1644,10 @@ class H(http.server.BaseHTTPRequestHandler):
             except (ValueError, RuntimeError) as e:
                 return self.send(409, str(e), "text/plain")
             _HEALTH["t"] = 0
+        elif self.path == "/api/diagnostics":  # "Copy diagnostics" on the Health card: a scrubbed block of text for a bug report (nothing is sent anywhere)
+            if self.headers.get("Host", "").split(":")[0] not in ("127.0.0.1", "localhost"):
+                return self.send(400, "refused", "text/plain")
+            return self.send(200, json.dumps({"text": diagnostics_text()}))
         elif self.path == "/api/cleanup":
             if running():
                 return self.send(409, "A run is in progress: wait until it finishes", "text/plain")
@@ -1632,8 +1665,12 @@ class H(http.server.BaseHTTPRequestHandler):
         elif self.path == "/api/restart":  # hard restart of the dashboard (the new code is loaded); refused while an upload is running
             if any((x or {}).get("state") == "posting" for x in REVIEW_STATUS.values()):  # only a clip being posted FROM THIS PAGE lives inside the dashboard and would be cut off; runs, the live watcher and background jobs (stats...) are their own programs and keep going
                 return self.send(409, "An upload is running: Clippy restarts when it has finished", "text/plain")
+            try:
+                au = bool(json.loads(self.rfile.read(n) or b"{}").get("after_update"))  # the page restarts right after installing an update: then a version that does not start is rolled back
+            except Exception:
+                au = False
             self.send(200, "{}")
-            threading.Thread(target=restart_self, daemon=True).start()
+            threading.Thread(target=restart_self, args=(au,), daemon=True).start()
             return
         elif self.path == "/api/restore":
             if self.headers.get("Host", "").split(":")[0] not in ("127.0.0.1", "localhost") or n > 25_000_000:
@@ -1682,7 +1719,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 body = json.loads(self.rfile.read(n)); stem = body["id"]; layout = body["layout"]; nocaps = bool(body.get("nocaps")); assert STEM.match(stem) and layout in LAYOUTS and (REVIEW / (stem + ".mp4")).exists()
             except Exception:
                 return self.send(400, "bad values", "text/plain")
-            if (REVIEW_STATUS.get(stem) or {}).get("state") == "posting" or (R / "post.lock").exists():
+            if (REVIEW_STATUS.get(stem) or {}).get("state") == "posting" or lock_busy():
                 return self.send(409, "Busy: wait until the current post or re-cut has finished", "text/plain")
             try:
                 dd = json.loads((REVIEW / (stem + ".json")).read_text(encoding="utf-8"))
@@ -1839,7 +1876,7 @@ def update_loop():
                     if not restart_wanted():
                         break
                     if not any((x or {}).get("state") == "posting" for x in REVIEW_STATUS.values()):
-                        restart_self()
+                        restart_self(after_update=True)
                     time.sleep(30)
         except Exception:
             pass
@@ -1973,6 +2010,69 @@ def health_info():
             _HEALTH["v"] = {"items": [], "bad": 0, "warn": 0, "ok": True}
         _HEALTH["t"] = time.time()
     return _HEALTH["v"]
+
+
+def scrub(t):
+    """Make text safe to paste in a bug report: no user name, folders, e-mail addresses, keys or long tokens."""
+    t = str(t)
+    for real, shown in ((str(R), "<clippy folder>"), (str(pathlib.Path.home()), "<home>"), (os.environ.get("USERNAME", ""), "<user>")):
+        if real and len(real) > 2:
+            t = re.sub(re.escape(real), shown, t, flags=re.I)
+            t = re.sub(re.escape(real.replace(chr(92), "/")), shown, t, flags=re.I)
+    t = re.sub(r"[\w.+-]+@[\w-]+\.[\w.-]+", "<email>", t)
+    t = re.sub(r"(?i)\b(api[_-]?key|key|token|secret|password|cookie)s?(=|:)\s*\S+", r"\1\2 ***", t)
+    return re.sub(r"[A-Za-z0-9_\-]{32,}", "<secret>", t)
+
+
+def diagnostics_text():
+    """Everything a bug report needs, in one block of text: versions, what is installed, the health check, the settings that matter (no names, accounts or keys) and the last log lines,
+    scrubbed. Nothing is sent anywhere: the page puts it on the clipboard."""
+    import platform, shutil as _sh
+    out = ["Clippy diagnostics (" + time.strftime("%Y-%m-%d %H:%M") + ")"]
+    try:
+        ver = json.loads((R / "version.json").read_text(encoding="utf-8")).get("sha", "") if (R / "version.json").exists() else ""
+        out.append(f"Clippy version: {str(ver or update_info().get('installed') or 'not installed from GitHub (a copy of the project)')[:10]}  (update available: {bool(update_info().get('available'))})")
+    except Exception:
+        out.append("Clippy version: unknown")
+    out.append(f"Windows: {platform.platform()}   Python: {sys.version.split()[0]}")
+    try:
+        import importlib.metadata as md
+        out.append("yt-dlp: " + md.version("yt-dlp") + "   faster-whisper: " + md.version("faster-whisper"))
+    except Exception as e:
+        out.append(f"package versions unavailable ({str(e)[:40]})")
+    try:
+        import ctranslate2
+        out.append(f"graphics cards usable for speech recognition: {ctranslate2.get_cuda_device_count()}")
+    except Exception as e:
+        out.append(f"ctranslate2: unavailable ({str(e)[:40]})")
+    out.append("tools: " + ", ".join(f"{n}={'yes' if _sh.which(n) else 'NO'}" for n in ("ffmpeg", "ffprobe", "yt-dlp", "deno", "node", "winget")) + f", browser={getattr(__import__('upload'), 'BROWSER_NAME', None) or 'NONE'}")
+    try:
+        out.append(f"free disk: {_sh.disk_usage(str(R)).free / 1e9:.0f} GB   jobs folder: {cleanup.jobs_mb()} MB")
+    except Exception:
+        pass
+    try:
+        c = read_cfg()
+        keys = ("title_writer", "languages", "topic", "quality", "run_source", "auto_source", "twitch_clips", "twitch_period", "twitch_per_streamer", "videos_per_creator", "live_max_streams", "clip_seconds",
+                "layout", "autopilot", "auto_post", "posts_per_day", "clips_per_run", "youtube_cookies", "ai_check", "network_guard", "post_youtube", "post_tiktok", "upload_method")
+        out.append("settings: " + json.dumps({k: c.get(k) for k in keys if k in c}, ensure_ascii=False))
+        out.append(f"streamers in the list: {len(c.get('creators') or [])}   AI models: {len(c.get('ai_profiles') or [])}")
+    except Exception:
+        pass
+    try:
+        s = signin_state(); out.append(f"signed in: YouTube={s.get('youtube')} TikTok={s.get('tiktok')}")
+        bad = "; ".join(f"[{x['level']}] {x['label']}" for x in health_info().get("items", []) if x["level"] != "ok")
+        out.append("health: " + (bad or "all fine"))
+    except Exception:
+        pass
+    for name, lines in (("autorun.log", 70), ("live_watch.log", 30), ("netguard.log", 10)):
+        try:
+            f = R / name
+            if f.exists():
+                txt = f.read_bytes().decode("utf-8", errors="replace").replace(chr(0), "")
+                out += ["", f"--- {name} (last {lines} lines) ---", *scrub(chr(10).join(txt.splitlines()[-lines:])).splitlines()]
+        except OSError:
+            pass
+    return chr(10).join(out)
 
 
 def yt_limit_text():
