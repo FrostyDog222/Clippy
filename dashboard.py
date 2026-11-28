@@ -1511,7 +1511,7 @@ class H(http.server.BaseHTTPRequestHandler):
             log = log_text()
             return self.send(200, json.dumps({"config": c, "paused": PAUSE.exists(), "checks": checks(),
                                               "today": [p for p in posts if p.get("date") == today and not p.get("deleted")], "log": log,
-                                              "progress": progress(), "signin": signin_state(), "browser": getattr(__import__("upload"), "BROWSER_NAME", None), "live_run": live_run_active(), "whisper_medium": common.whisper_cached("medium"), "fix": {"what": FIX["what"], "state": FIX["state"], "msg": FIX["msg"]}, "jobs_mb": cleanup.jobs_mb(), "all_languages": textutil.LANGS, "perf": perf(), "ai_keys": {p["id"]: secretstore.exists(f"key_{p['id']}") for p in c.get("ai_profiles", [])}, "blocked": blocked_msg(c), "live": live_status(),
+                                              "progress": progress(), "signin": signin_state(), "browser": getattr(__import__("upload"), "BROWSER_NAME", None), "live_run": live_run_active(), "whisper": whisper_info(), "fix": {"what": FIX["what"], "state": FIX["state"], "msg": FIX["msg"]}, "jobs_mb": cleanup.jobs_mb(), "all_languages": textutil.LANGS, "perf": perf(), "ai_keys": {p["id"]: secretstore.exists(f"key_{p['id']}") for p in c.get("ai_profiles", [])}, "blocked": blocked_msg(c), "live": live_status(),
                                               "review": review_items(), "run_stale": run_stale(), "autostart": autostart_state(), "health": health_info(), "run_timing": run_timing(), "run_suspended": run_suspended(),
                                               "update": update_info(), "learn": learn_info(), "boot": BOOT, "restart_needed": restart_wanted(), "html": int((R / "dashboard.html").stat().st_mtime),
                                               "runlog": log_text(8000, 8000),  # the Current run log: the live watcher's log while live watching is on, else the last run's
@@ -1935,7 +1935,7 @@ def startup_blocked(argv, cfg):
 _HEALTH = {"t": 0.0, "v": None}
 
 
-FIXES = {"ffmpeg": ("ffmpeg", "Gyan.FFmpeg", "ffmpeg"), "browser": ("Google Chrome", "Google.Chrome", "chrome"), "deno": ("Deno", "DenoLand.Deno", "js"), "ytdlp": ("yt-dlp", "", "ytdlp"), "whisper": ("the better speech model", "", "whisper")}
+FIXES = {"ffmpeg": ("ffmpeg", "Gyan.FFmpeg", "ffmpeg"), "browser": ("Google Chrome", "Google.Chrome", "chrome"), "deno": ("Deno", "DenoLand.Deno", "js"), "ytdlp": ("yt-dlp", "", "ytdlp"), "whisper": ("the better speech model", "", "whisper"), "whisper_redo": ("the better speech model", "", "whisper"), "whisper_test": ("the speech model test", "", "whisper")}
 FIX = {"what": None, "state": "", "msg": ""}  # the repair started from the Health card (one at a time)
 
 
@@ -1961,10 +1961,19 @@ def refresh_path():
 def _fix_worker(what):
     name, wid, _ = FIXES[what]
     try:
-        if what == "whisper":  # the medium speech model, once, from Hugging Face (the network guard lets this one process reach it)
+        if what == "whisper_test":  # does the model really load and run on this PC? (a short silent clip; nothing is downloaded)
+            r = subprocess.run([VPY, "-c", "import sys; sys.path.insert(0, 'scripts'); import common, numpy as np; m = common.load_whisper('cpu', 'medium'); s, i = m.transcribe(np.zeros(32000, dtype=np.float32)); list(s); print('ready')"],
+                               cwd=R, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600, creationflags=NOWIN, env={**os.environ, "CLIPPY_NOBG": "1"})
+            ok = r.returncode == 0 and "ready" in (r.stdout or "")
+            (R / "whisper_test.json").write_text(json.dumps({"ok": ok, "msg": "" if ok else ((r.stderr or r.stdout or "unknown error").strip().splitlines() or ["unknown error"])[-1][:160], "ts": time.time()}), encoding="utf-8")
+            FIX.update(state="done" if ok else "failed", msg="The speech model works on this PC." if ok else "The speech model does not load: " + ((r.stderr or "").strip().splitlines() or ["unknown error"])[-1][:140])
+            _HEALTH["t"] = 0
+            return
+        if what in ("whisper", "whisper_redo"):  # the medium speech model, once, from Hugging Face (the network guard lets this one process reach it); redo = download everything again
             env = {**os.environ, "CLIPPY_ALLOW_HF": "1", "HF_HUB_OFFLINE": "0"}  # (the network guard otherwise switches the model hub to offline once a model is cached)
-            r = subprocess.run([VPY, "-c", "from faster_whisper import WhisperModel; WhisperModel('medium'); print('ready')"], cwd=R, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                               timeout=2400, creationflags=NOWIN, env=env)
+            code = "from huggingface_hub import snapshot_download as s; s('Systran/faster-whisper-medium', force_download=True); print('ready')" if what == "whisper_redo" else "from faster_whisper import WhisperModel; WhisperModel('medium'); print('ready')"
+            r = subprocess.run([VPY, "-c", code], cwd=R, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3000, creationflags=NOWIN, env=env)
+            (R / "whisper_test.json").unlink(missing_ok=True)  # a new download: the old test result no longer counts
         elif what == "ytdlp":
             r = subprocess.run([VPY, "-m", "pip", "install", "-U", "yt-dlp[default]"], cwd=R, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900, creationflags=NOWIN,
                                env={**os.environ, "CLIPPY_ALLOW_PYPI": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1"})
@@ -1991,6 +2000,25 @@ def start_fix(what):
     threading.Thread(target=_fix_worker, args=(what,), daemon=True).start()
 
 
+def whisper_info():
+    """The bigger speech model for non-English languages: {"state": ok | missing | downloading | broken | failed, "msg"}. Green / yellow / red in the page."""
+    st, msg = common.whisper_status("medium")
+    if FIX["what"] in ("whisper", "whisper_redo"):
+        if FIX["state"] == "running":
+            return {"state": "downloading", "msg": "Downloading... this takes a few minutes (about 1.5 GB)."}
+        if FIX["state"] == "failed":
+            return {"state": "failed", "msg": FIX["msg"] or "The download failed."}
+    if st == "ok":
+        try:
+            t = json.loads((R / "whisper_test.json").read_text(encoding="utf-8"))
+        except Exception:
+            t = None
+        if t and not t.get("ok"):
+            return {"state": "broken", "msg": "The last test failed: " + str(t.get("msg") or "unknown error")}
+        return {"state": "ok", "msg": "Tested: it works on this PC." if t else "Installed."}
+    return {"state": st, "msg": msg}
+
+
 def health_info():
     """The health check (scripts/health.py), cached for 20 s: the dashboard asks every few seconds."""
     if _HEALTH["v"] is None or time.time() - _HEALTH["t"] > 20:
@@ -2004,11 +2032,14 @@ def health_info():
                 free = _sh.disk_usage(str(R)).free / 1e9
             except OSError:
                 free = None
-            wl, wok = None, None
+            wl, wok, wbad = None, None, None
             try:
                 langs = c.get("languages", ["en"])
                 langs = [langs] if isinstance(langs, str) else list(langs or [])
-                if langs != ["en"] and not common.whisper_cached("medium"):  # any language other than English (an empty list = any language)
+                wi = whisper_info()
+                if langs != ["en"] and wi["state"] in ("broken", "failed"):
+                    wbad = wi["msg"]
+                elif langs != ["en"] and not common.whisper_cached("medium"):  # any language other than English (an empty list = any language)
                     wl = textutil.LANGS.get(next((x for x in langs if x != "en"), ""), "other languages")
                 elif langs != ["en"]:
                     wok = "Speech recognition: medium model installed (more accurate for " + (textutil.LANGS.get(next((x for x in langs if x != "en"), ""), "other languages")) + ")"
@@ -2016,7 +2047,7 @@ def health_info():
                     wok = "Speech recognition: small model (English)"
             except Exception:
                 wl = None
-            items = health.checks(c, signin_state(), update_info(), free, len(waiting_clips()), have, yt_limit_text(), yt_block_min=yt_block_minutes(), whisper_lang=wl, whisper_ok=wok)
+            items = health.checks(c, signin_state(), update_info(), free, len(waiting_clips()), have, yt_limit_text(), yt_block_min=yt_block_minutes(), whisper_lang=wl, whisper_ok=wok, whisper_bad=wbad)
             for it in items:  # a repair started from here: show it on its own line
                 if FIX["what"] and it["id"] == FIXES[FIX["what"]][2]:
                     if FIX["state"] == "running":

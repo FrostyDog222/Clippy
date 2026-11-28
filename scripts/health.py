@@ -2,7 +2,7 @@
 checks(...) -> [{"id", "level": ok|info|warn|bad, "label", "detail", "fix": None | {"label", "action"}}]   action: signin | update | cleanup | install:<ffmpeg|ytdlp|browser|deno|whisper> | settings:<element id> | none"""
 
 
-def checks(cfg, signin, update, free_gb, waiting, have, yt_limit_until=None, max_waiting=8, yt_block_min=None, whisper_lang=None, whisper_ok=None):
+def checks(cfg, signin, update, free_gb, waiting, have, yt_limit_until=None, max_waiting=8, yt_block_min=None, whisper_lang=None, whisper_ok=None, whisper_bad=None):
     out = []
 
     def add(i, level, label, detail="", fix=None):
@@ -42,7 +42,9 @@ def checks(cfg, signin, update, free_gb, waiting, have, yt_limit_until=None, max
         add("waiting", "info", f"{waiting} clips are waiting for you", "Autopilot stops preparing new clips while this many wait. Look at them: rate each one (👍, 😐 or 👎), then post, schedule or remove it.")
     if update and update.get("available"):
         add("update", "info", "A new version of Clippy is available", "", {"label": "Update now", "action": "update"})
-    if whisper_lang:  # a language other than English is picked, and only the small speech model is on this PC
+    if whisper_bad:  # the bigger speech model is on the PC but broken (cut-off download, or it does not load)
+        add("whisper", "bad", "The bigger speech model has a problem", f"{whisper_bad}. Clippy uses the small one meanwhile (less accurate for other languages).", {"label": "Re-download", "action": "install:whisper_redo"})
+    elif whisper_lang:  # a language other than English is picked, and only the small speech model is on this PC
         add("whisper", "warn", f"Speech recognition for {whisper_lang} is better with a bigger model (one-time download, about 1.5 GB)",
             f"The small model mishears a lot of {whisper_lang}, so the moments and titles suffer. The medium model is far more accurate (about 3 times slower). It is downloaded once from Hugging Face.",
             {"label": "Download", "action": "install:whisper"})

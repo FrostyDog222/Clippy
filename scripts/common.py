@@ -22,13 +22,34 @@ def find_browser():
     return None, None, None
 
 
-def whisper_cached(size):
-    """Is this faster-whisper model already on the PC (Hugging Face cache)? Nothing is downloaded here."""
-    base = Path(os.environ.get("HF_HOME") or (Path.home() / ".cache" / "huggingface")) / "hub" / f"models--Systran--faster-whisper-{size}" / "snapshots"
+WHISPER_MIN_BYTES = {"small": 400_000_000, "medium": 1_400_000_000}  # a complete model.bin is bigger than this (a cut-off download is not)
+
+
+def whisper_status(size):
+    """("ok" | "missing" | "broken", message): is this faster-whisper model complete in the Hugging Face cache? Nothing is downloaded here."""
+    root = Path(os.environ.get("HF_HOME") or (Path.home() / ".cache" / "huggingface")) / "hub" / f"models--Systran--faster-whisper-{size}"
+    if not root.exists():
+        return "missing", "not downloaded yet"
     try:
-        return any((p / "model.bin").exists() for p in base.iterdir())
+        snaps = [p for p in (root / "snapshots").iterdir() if p.is_dir()]
     except OSError:
-        return False
+        return "broken", "the model folder is empty"
+    for p in snaps:
+        need = ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt")
+        if all((p / n).exists() for n in need):
+            try:
+                if (p / "model.bin").stat().st_size >= WHISPER_MIN_BYTES.get(size, 1):
+                    return "ok", "installed"
+            except OSError:
+                pass
+            return "broken", "the model file is incomplete (a download was cut off)"
+    partial = any(root.glob("blobs/*.incomplete"))
+    return "broken", "the download was cut off" if partial else "some model files are missing"
+
+
+def whisper_cached(size):
+    """Is this faster-whisper model complete on the PC? (A cut-off download does not count, so Clippy never loads a broken model.)"""
+    return whisper_status(size)[0] == "ok"
 
 
 def whisper_size(cfg=None):

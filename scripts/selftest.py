@@ -1748,6 +1748,31 @@ def test_romanian_support_pieces():
     assert "Write ALL" not in ai_title.build_prompt("hello there", "x", "y")
 
 
+def test_the_speech_model_status_is_green_yellow_or_red():
+    import common, health, tempfile, os
+    home = Path(tempfile.mkdtemp()); keep = os.environ.get("HF_HOME"); os.environ["HF_HOME"] = str(home)
+    try:
+        root = home / "hub" / "models--Systran--faster-whisper-medium"
+        assert common.whisper_status("medium")[0] == "missing" and not common.whisper_cached("medium")      # yellow: not downloaded
+        snap = root / "snapshots" / "abc"; snap.mkdir(parents=True); (root / "blobs").mkdir()
+        for n in ("config.json", "tokenizer.json", "vocabulary.txt"):
+            (snap / n).write_text("x")
+        (snap / "model.bin").write_bytes(b"x" * 1000)
+        st, msg = common.whisper_status("medium"); assert st == "broken" and "incomplete" in msg and not common.whisper_cached("medium")   # red: a cut-off file is never used
+        (snap / "model.bin").unlink(); (root / "blobs" / "x.incomplete").write_text("x")
+        assert common.whisper_status("medium")[0] == "broken"
+        common.WHISPER_MIN_BYTES["medium"] = 500                                                          # (a small size for the test)
+        (snap / "model.bin").write_bytes(b"x" * 1000)
+        assert common.whisper_status("medium")[0] == "ok" and common.whisper_cached("medium")           # green
+    finally:
+        common.WHISPER_MIN_BYTES["medium"] = 1_400_000_000
+        if keep is None: os.environ.pop("HF_HOME", None)
+        else: os.environ["HF_HOME"] = keep
+    have = {"chrome": True, "ffmpeg": True, "ytdlp": True}
+    bad = {x["id"]: x for x in health.checks({}, {}, None, 50, 0, have, whisper_bad="The last test failed: out of memory")}
+    assert bad["whisper"]["level"] == "bad" and bad["whisper"]["fix"]["action"] == "install:whisper_redo"
+
+
 if __name__ == "__main__":
     fails = 0
     before = _snapshot()
