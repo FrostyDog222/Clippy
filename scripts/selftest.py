@@ -1718,6 +1718,34 @@ def test_a_running_run_is_not_reported_as_interrupted():
         d.R = keep
 
 
+def test_romanian_support_pieces():
+    import common, health, textutil, pick_rules as PR, ai_title
+    assert textutil.SWEAR.search("ce pula mea") and textutil.SWEAR.search("băi, căcat") and not textutil.SWEAR.search("fut" + "bol")   # Romanian swearing is masked, football is not
+    assert textutil.CHAT_SHOCK.search("NU SE POATE") and textutil.CHAT_SHOCK.search("MAMĂ")
+    assert "și" in PR.DANGLING_LAST and "pentru" in PR.DANGLING_PREV
+    # a bigger speech model for languages other than English, only when it is on the PC
+    real = common.whisper_cached
+    try:
+        common.whisper_cached = lambda size: True
+        assert common.whisper_size({"languages": ["ro"]}) == "medium" and common.whisper_size({"languages": ["en"]}) == "small" and common.whisper_size({"languages": []}) == "medium"
+        common.whisper_cached = lambda size: False
+        assert common.whisper_size({"languages": ["ro"]}) == "small"
+    finally:
+        common.whisper_cached = real
+    have = {"chrome": True, "ffmpeg": True, "ytdlp": True}
+    it = {x["id"]: x for x in health.checks({}, {}, None, 50, 0, have, whisper_lang="Romanian")}
+    assert it["whisper"]["fix"]["action"] == "install:whisper" and "Romanian" in it["whisper"]["label"]
+    assert "whisper" not in {x["id"] for x in health.checks({}, {}, None, 50, 0, have)}
+    # titles are asked for in the channel's language
+    ai_title.LANG_NAME = "Romanian"
+    try:
+        assert "Write ALL three texts in Romanian" in ai_title.build_prompt("salut", "x", "y")
+        assert ai_title.valid({"on_video": "Ce haos", "youtube_title": "Ce moment, băi frate", "tiktok_line": "Când te trezești și vezi ce a făcut"}) is not None
+    finally:
+        ai_title.LANG_NAME = ""
+    assert "Write ALL" not in ai_title.build_prompt("hello there", "x", "y")
+
+
 if __name__ == "__main__":
     fails = 0
     before = _snapshot()

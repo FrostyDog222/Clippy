@@ -29,7 +29,7 @@ def valid(d):
         return None
     if not (8 <= len(yt) <= 70) or not (8 <= len(tt) <= 90):
         return None
-    if not (2 <= len(ov.split()) <= 7) or len(ov) > 40 or re.search(r"[^\x00-\x7F‘’“”]", ov) or BANNED.search(ov) or SWEAR.search(ov):
+    if not (2 <= len(ov.split()) <= 7) or len(ov) > 40 or re.search(r"[^\x00-\x7F‘’“”]", ov) and not LANG_NAME or BANNED.search(ov) or SWEAR.search(ov):
         ov = ""  # the on-video text is not shown any more: a bad one no longer throws away a good title and description
     for s in (yt, tt):
         if BANNED.search(s) or SWEAR.search(s) or re.search(r"https?://|#|@|\*", s):  # '*' = a masked swear such as f***
@@ -38,14 +38,17 @@ def valid(d):
 
 
 TOPIC_NAME = "GTA 6"  # set by autorun.configure() from the dashboard topic
+LANG_NAME = ""  # set by autorun.configure(): "Romanian" when that is the one language picked in Settings ("" = English or any language: the titles follow the transcript)
 VOICES = ["deadpan understatement", "a short question the viewer wants answered", "mock-serious commentary", "an exaggerated reaction in one line",
           "a dry one-liner like a friend texting", "a playful 'nobody:' style setup"]  # variety so many clips do not read as one template
 
 
 def build_prompt(transcript, creator, source_title, scene=None, chat=None, kind=None):
+    nonascii = bool(transcript) and sum(c.isascii() for c in transcript[:400]) / max(1, len(transcript[:400])) < 0.9
+    lang_rule = (" Write ALL three texts in " + LANG_NAME + " (natural and funny, the way a " + LANG_NAME + "-speaking streamer's audience talks, with the correct accents), not in English.") if LANG_NAME else (" Write the texts in the language the streamer speaks in the transcript." if nonascii else "")
     return f"""You write short, funny or eye-catching titles for a vertical {TOPIC_NAME} clip. Reply with ONE JSON object and nothing else:
 {{"on_video": "...", "youtube_title": "...", "tiktok_line": "..."}}
-Rules: 100% true to the clip, never invent events, never claim leaks or early access, no swearing, no hashtags, no links, no emoji in on_video.
+Rules: 100% true to the clip, never invent events, never claim leaks or early access, no swearing, no hashtags, no links, no emoji in on_video.{lang_rule}
 - on_video: 2-6 words, big text on screen, the funniest real line or the sharpest deadpan observation.
 - youtube_title: max 65 characters, funny or "wow" ONLY if the clip really is; one emoji allowed at the end.
 - tiktok_line: this becomes the post description. Max 80 characters and AT LEAST 4 words (never a single word such as 'Exposed'): short, funny and catchy: a short joke about the moment, like a friend's caption. You may nod at what is happening, but never describe or explain it in detail (viewers can see it): no "he is watching...", no "reacts to". Pick ONE style that fits: (a) a vibe line such as "This escalated quickly 😭"; (b) a curious question about the moment such as "How did he jump that? 😭"; (c) a joke on the funny angle (a game inside a game: "We need to go deeper 💀"; a plane on fire: "Totally fine, nothing to see here 😭"). One emoji allowed. Never quote or repeat what is said in the clip, never a long summary.

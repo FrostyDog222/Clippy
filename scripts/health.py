@@ -1,8 +1,8 @@
 """Health check: is everything Clippy needs in place? Pure logic (the dashboard gathers the facts and passes them in), so it can be tested.
-checks(...) -> [{"id", "level": ok|info|warn|bad, "label", "detail", "fix": None | {"label", "action"}}]   action: signin | update | cleanup | install:<ffmpeg|ytdlp|browser|deno> | settings:<element id> | none"""
+checks(...) -> [{"id", "level": ok|info|warn|bad, "label", "detail", "fix": None | {"label", "action"}}]   action: signin | update | cleanup | install:<ffmpeg|ytdlp|browser|deno|whisper> | settings:<element id> | none"""
 
 
-def checks(cfg, signin, update, free_gb, waiting, have, yt_limit_until=None, max_waiting=8, yt_block_min=None):
+def checks(cfg, signin, update, free_gb, waiting, have, yt_limit_until=None, max_waiting=8, yt_block_min=None, whisper_lang=None):
     out = []
 
     def add(i, level, label, detail="", fix=None):
@@ -42,6 +42,10 @@ def checks(cfg, signin, update, free_gb, waiting, have, yt_limit_until=None, max
         add("waiting", "info", f"{waiting} clips are waiting for you", "Autopilot stops preparing new clips while this many wait. Look at them: rate each one (👍, 😐 or 👎), then post, schedule or remove it.")
     if update and update.get("available"):
         add("update", "info", "A new version of Clippy is available", "", {"label": "Update now", "action": "update"})
+    if whisper_lang:  # a language other than English is picked, and only the small speech model is on this PC
+        add("whisper", "warn", f"Speech recognition for {whisper_lang} is better with a bigger model (one-time download, about 1.5 GB)",
+            f"The small model mishears a lot of {whisper_lang}, so the moments and titles suffer. The medium model is far more accurate (about 3 times slower). It is downloaded once from Hugging Face.",
+            {"label": "Download", "action": "install:whisper"})
     if yt_block_min:
         add("ytblock", "warn", f"YouTube is asking to confirm you are not a bot (downloads paused for about {yt_block_min} more min)",
             "Sign in to YouTube in Clippy so it can use your login (Accounts). If it keeps happening, your internet connection may be flagged: try another network (for example your phone's hotspot), or wait a few hours. Run now tries again anyway. Twitch clips keep working.",

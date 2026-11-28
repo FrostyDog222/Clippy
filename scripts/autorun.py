@@ -948,6 +948,8 @@ def configure(cfg):
     try:
         import ai_check, ai_title
         ai_check.TOPIC_NAME = ai_title.TOPIC_NAME = TP["name"]; ai_check.TOPIC_GTA = TP["gta"]
+        _l = textutil.allowed_languages(cfg)
+        ai_title.LANG_NAME = textutil.LANGS.get(_l[0], "") if _l and len(_l) == 1 and _l[0] != "en" else ""
     except Exception:
         pass
     mx = max(10, min(60, int(cfg.get("clip_seconds", 30)))); LIMITS = (min(max(8, int(mx * 0.4)), 14), mx)  # short punchy moments stay short (14 s at most as the minimum); a moment that goes on may use all of clip_seconds

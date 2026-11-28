@@ -22,6 +22,27 @@ def find_browser():
     return None, None, None
 
 
+def whisper_cached(size):
+    """Is this faster-whisper model already on the PC (Hugging Face cache)? Nothing is downloaded here."""
+    base = Path(os.environ.get("HF_HOME") or (Path.home() / ".cache" / "huggingface")) / "hub" / f"models--Systran--faster-whisper-{size}" / "snapshots"
+    try:
+        return any((p / "model.bin").exists() for p in base.iterdir())
+    except OSError:
+        return False
+
+
+def whisper_size(cfg=None):
+    """"medium" for any language other than English when that model is on the PC (small speech models are poor at Romanian and the like), else "small"."""
+    try:
+        if cfg is None:
+            cfg = json.loads((Path(os.environ.get("CLIP_DESK_HOME", Path.cwd())) / "autopost_config.json").read_text(encoding="utf-8-sig"))
+        langs = cfg.get("languages", ["en"])
+        english_only = langs == ["en"] or langs == "en"
+    except Exception:
+        english_only = True
+    return "medium" if (not english_only and whisper_cached("medium")) else "small"
+
+
 def whisper_types(device):
     """The compute types to try for faster-whisper on this device, best first. A GPU decides what it can do (older graphics cards have no float16, which made the
     speech recognition fail with "Requested float16 compute type"), so the list comes from what the device itself reports."""

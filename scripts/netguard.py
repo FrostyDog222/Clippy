@@ -144,5 +144,5 @@ def install():
     socket.socket.connect, socket.socket.connect_ex = connect, connect_ex
     # model hubs: use the local cache only (a first-ever download needs CLIPPY_ALLOW_HF=1); no analytics from common libraries
     os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1"); os.environ.setdefault("DO_NOT_TRACK", "1")
-    if (pathlib.Path.home() / ".cache" / "huggingface" / "hub").exists() and any((pathlib.Path.home() / ".cache" / "huggingface" / "hub").glob("models--*whisper*")):
+    if not os.environ.get("CLIPPY_ALLOW_HF") and (pathlib.Path.home() / ".cache" / "huggingface" / "hub").exists() and any((pathlib.Path.home() / ".cache" / "huggingface" / "hub").glob("models--*whisper*")):
         os.environ.setdefault("HF_HUB_OFFLINE", "1")

@@ -288,8 +288,9 @@ def snap_to_speech(words, start, end, min_len, max_len, dur=None):
 
 # A viewer-made Twitch clip (or any short source) can simply end in the middle of a sentence ("... puts family-friendly destruction to a whole"): there is no more footage to finish it.
 DANGLING_LAST = {"a", "an", "the", "to", "of", "in", "on", "at", "for", "with", "from", "into", "by", "and", "but", "or", "so", "because", "if", "when", "while", "that", "which", "who",
-                 "than", "as", "is", "are", "was", "were", "be", "been", "have", "has", "had", "will", "would", "can", "could", "my", "your", "his", "her", "their", "our", "like", "gonna", "about"}
-DANGLING_PREV = {"a", "an", "the", "to", "of", "in", "on", "at", "for", "with", "from", "into", "my", "your", "his", "her", "their", "our"}   # "to a whole" / "in the": a noun is missing
+                 "than", "as", "is", "are", "was", "were", "be", "been", "have", "has", "had", "will", "would", "can", "could", "my", "your", "his", "her", "their", "our", "like", "gonna", "about",
+                 "și", "sau", "dar", "că", "să", "de", "la", "pe", "cu", "în", "din", "pentru", "care", "când", "dacă", "deci", "iar", "ca", "pentru"}  # + Romanian
+DANGLING_PREV = {"a", "an", "the", "to", "of", "in", "on", "at", "for", "with", "from", "into", "my", "your", "his", "her", "their", "our", "un", "o", "niște", "la", "pe", "cu", "în", "din", "de", "al", "ale", "pentru", "meu", "tău", "lui", "lor"}   # "to a whole" / "in the": a noun is missing
 
 
 def unfinished_tail(words, start, end, src_dur, min_len):

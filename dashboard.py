@@ -1935,7 +1935,7 @@ def startup_blocked(argv, cfg):
 _HEALTH = {"t": 0.0, "v": None}
 
 
-FIXES = {"ffmpeg": ("ffmpeg", "Gyan.FFmpeg", "ffmpeg"), "browser": ("Google Chrome", "Google.Chrome", "chrome"), "deno": ("Deno", "DenoLand.Deno", "js"), "ytdlp": ("yt-dlp", "", "ytdlp")}
+FIXES = {"ffmpeg": ("ffmpeg", "Gyan.FFmpeg", "ffmpeg"), "browser": ("Google Chrome", "Google.Chrome", "chrome"), "deno": ("Deno", "DenoLand.Deno", "js"), "ytdlp": ("yt-dlp", "", "ytdlp"), "whisper": ("the better speech model", "", "whisper")}
 FIX = {"what": None, "state": "", "msg": ""}  # the repair started from the Health card (one at a time)
 
 
@@ -1961,7 +1961,11 @@ def refresh_path():
 def _fix_worker(what):
     name, wid, _ = FIXES[what]
     try:
-        if what == "ytdlp":
+        if what == "whisper":  # the medium speech model, once, from Hugging Face (the network guard lets this one process reach it)
+            env = {**os.environ, "CLIPPY_ALLOW_HF": "1", "HF_HUB_OFFLINE": "0"}  # (the network guard otherwise switches the model hub to offline once a model is cached)
+            r = subprocess.run([VPY, "-c", "from faster_whisper import WhisperModel; WhisperModel('medium'); print('ready')"], cwd=R, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               timeout=2400, creationflags=NOWIN, env=env)
+        elif what == "ytdlp":
             r = subprocess.run([VPY, "-m", "pip", "install", "-U", "yt-dlp[default]"], cwd=R, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900, creationflags=NOWIN,
                                env={**os.environ, "CLIPPY_ALLOW_PYPI": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1"})
         else:
@@ -2000,7 +2004,15 @@ def health_info():
                 free = _sh.disk_usage(str(R)).free / 1e9
             except OSError:
                 free = None
-            items = health.checks(c, signin_state(), update_info(), free, len(waiting_clips()), have, yt_limit_text(), yt_block_min=yt_block_minutes())
+            wl = None
+            try:
+                langs = c.get("languages", ["en"])
+                langs = [langs] if isinstance(langs, str) else list(langs or [])
+                if langs and langs != ["en"] and not common.whisper_cached("medium"):
+                    wl = textutil.LANGS.get(next((x for x in langs if x != "en"), ""), "your language")
+            except Exception:
+                wl = None
+            items = health.checks(c, signin_state(), update_info(), free, len(waiting_clips()), have, yt_limit_text(), yt_block_min=yt_block_minutes(), whisper_lang=wl)
             for it in items:  # a repair started from here: show it on its own line
                 if FIX["what"] and it["id"] == FIXES[FIX["what"]][2]:
                     if FIX["state"] == "running":

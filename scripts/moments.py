@@ -10,7 +10,7 @@ import argparse, json, math, re, subprocess, sys, wave
 from pathlib import Path
 import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
-from common import ffprobe, is_url, job_dir, load_json, load_whisper, run, save_json, tool, ytdlp_base, ytdlp_json
+from common import ffprobe, is_url, job_dir, load_json, load_whisper, run, save_json, tool, whisper_size, ytdlp_base, ytdlp_json
 
 TALK = re.compile(r"\b(chat|y\s?'?all|subs?|subscribe|donations?|gifted|should i|my channel)\b", re.I)
 # words that show the streamer is really in the game around this moment (a 700-minute stream is mostly talking / other games)
@@ -145,7 +145,7 @@ def transcribe(wav, d):
         pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
 
     def run_on(device):
-        model = load_whisper(device)  # the compute type comes from what this PC's device supports
+        model = load_whisper(device, whisper_size())  # the compute type comes from what this PC's device supports; a bigger model for languages other than English
         segs, tinfo = model.transcribe(pcm, word_timestamps=True, vad_filter=True)
         save_json(d / "lang.json", {"language": tinfo.language, "p": round(float(tinfo.language_probability), 2)})  # English-only pipeline: see main()
         out_words = [{"w": w.word.strip(), "s": round(w.start, 2), "e": round(w.end, 2)} for s in segs for w in (s.words or [])]

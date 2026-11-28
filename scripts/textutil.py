@@ -1,7 +1,8 @@
 """Small text helpers shared by autorun.py and make_meta.py (no network, no AI)."""
 import json, pathlib, re
 
-SWEAR = re.compile(r"(fuck\w*|shit\w*|bitch\w*|nigg\w*|cunt\w*|dick\w*|pussy\w*|asshole\w*|whore\w*|slut\w*)", re.I)
+SWEAR = re.compile(r"(fuck\w*|shit\w*|bitch\w*|nigg\w*|cunt\w*|dick\w*|pussy\w*|asshole\w*|whore\w*|slut\w*"
+                   r"|\bpul[aăeiu]\b|\bpizd\w*|\bmui[ei]\w*|\bf[uû]t(u|e|ut|ui|ere|eți|ând)\b|\bc[aă]c[aă][tț]\w*|\brahat\w*|\bcurv\w*|\bdracu\w*|\bpoponar\w*|\bjidan\w*|\bț[iî]g[aă]n\w*|\bhandicapat\w*|\bretardat\w*)", re.I)  # + Romanian
 BANNED = re.compile(r"\b(leak|leaked|early access|play early|free download|download free|crack|piracy|cheat engine|giveaway)\b", re.I)
 REACT = re.compile(r"(what is this|no way|oh my (god|gosh)|are you serious|insane|crazy|let'?s go|holy|can you do this|i can'?t believe|look at (this|that)|\?)", re.I)
 
@@ -72,7 +73,7 @@ def allowed_languages(cfg):
 
 
 # chat shock/hype reactions (strong) and mild laughter; "WTF"-type messages are what a real moment looks like in chat
-CHAT_SHOCK = re.compile(r"(\bWT[FH]\b|\bWHAT THE\b|\bOMG\b|\bOMFG\b|\bNO WAY\b|\bHOLY\b|\bBRO+\b|\bBRUH\b|\bI CANT\b|\bICANT\b|\bCLIP( IT)?\b|\bPOG(GERS|CHAMP)?\b|\bINSANE\b|\bCRAZY\b|\bDEAD\b|\bNOO+\b|\bWHAT\?+|\?!|!\?|💀|😭|🤯|😱|🔥|😮|🙀|\bWO+W+\b|\bPOGU\b|\bMONKA[SW]\b|\bNO PUEDE SER\b|\bMADRE M[IÍ]A\b|\bDIOS M[IÍ]O\b|\bJODER\b|\bQU[EÉ] LOCURA\b|\bMEU DEUS\b|\bMDS\b|\bCARAMBA\b|\bCARAC[AÁ]\b|\bN[AÃ]O ACREDITO\b|\bEITA\b|\bKRASS\b|\bDIGGA\b|\bWAHNSINN\b|\bOHA\b|\bPUTAIN\b|\bINCROYABLE\b|\bMON DIEU\b)", re.I)  # + shock in other languages
+CHAT_SHOCK = re.compile(r"(\bWT[FH]\b|\bWHAT THE\b|\bOMG\b|\bOMFG\b|\bNO WAY\b|\bHOLY\b|\bBRO+\b|\bBRUH\b|\bI CANT\b|\bICANT\b|\bCLIP( IT)?\b|\bPOG(GERS|CHAMP)?\b|\bINSANE\b|\bCRAZY\b|\bDEAD\b|\bNOO+\b|\bWHAT\?+|\?!|!\?|💀|😭|🤯|😱|🔥|😮|🙀|\bWO+W+\b|\bPOGU\b|\bMONKA[SW]\b|\bB[ĂA]I\b|\bMAM[ĂA]\b|\bDOAMNE\b|\bNU SE POATE\b|\bINCREDIBIL\b|\bNEBUNIE\b|\bVAI DE MINE\b|\bNO PUEDE SER\b|\bMADRE M[IÍ]A\b|\bDIOS M[IÍ]O\b|\bJODER\b|\bQU[EÉ] LOCURA\b|\bMEU DEUS\b|\bMDS\b|\bCARAMBA\b|\bCARAC[AÁ]\b|\bN[AÃ]O ACREDITO\b|\bEITA\b|\bKRASS\b|\bDIGGA\b|\bWAHNSINN\b|\bOHA\b|\bPUTAIN\b|\bINCROYABLE\b|\bMON DIEU\b)", re.I)  # + shock in other languages
 CHAT_LAUGH = re.compile(r"(\bLMAO+\b|\bLOL\b|\bKEKW?\b|\bOMEGALUL\b|\bLUL\b|\bAHAHA|😂|🤣|😆|😹|\bja(ja)+j?\b|\bje(je)+\b|\bk{3,}\b|\brs(rs)+\b|\bha(ha)+h?\b|\bhe(he)+\b|\bp?t?mdr\b|\bx+d{2,}\b|\bLULW\b)", re.I)  # + laughter in Spanish, Portuguese, French, German...
 
 
